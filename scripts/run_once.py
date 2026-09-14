@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 # Let this script find the other folders (core/, collectors/) when run directly
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from collectors import binance, okx, bybit
+from collectors import binance, okx, bybit, mexc, gateio
 from core.validate import clean_prices
 from core.db import get_exchange_id, save_prices
 
@@ -27,6 +27,8 @@ COLLECTORS = {
     "binance": binance,
     "okx": okx,
     "bybit": bybit,
+    "mexc": mexc,
+    "gateio": gateio,
 }
 
 
