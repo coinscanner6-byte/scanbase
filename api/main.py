@@ -1,0 +1,135 @@
+"""
+Scanbase - the API
+
+This is the part that finally lets outside systems - including
+CoinScanner - ask "what's the price of Bitcoin?" and get a real
+answer back over the internet, instead of someone opening the
+database by hand.
+
+Nothing in here collects data. It only reads what the background
+worker (run_forever.py) has already saved. Collection and serving
+are two separate jobs, running as two separate services, so a
+problem in one never breaks the other.
+
+Run locally with:
+    uvicorn api.main:app --reload
+
+On Railway, this runs as its own service, separate from the worker.
+"""
+
+import sys
+import os
+from typing import Optional
+
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from fastapi import FastAPI, HTTPException
+from sqlalchemy import text
+from core.db import engine
+
+app = FastAPI(
+    title="Scanbase API",
+    description="Live and historical crypto prices, collected from multiple exchanges.",
+    version="0.1.0",
+)
+
+
+@app.get("/v1/health")
+def health():
+    """
+    A simple 'are you alive' check. Used by Railway and by anyone
+    integrating with the API to confirm it's actually responding
+    before trying anything more complicated.
+    """
+    return {"status": "ok"}
+
+
+@app.get("/v1/exchanges")
+def list_exchanges():
+    """
+    Returns every exchange we collect from, and whether each one is
+    currently marked active. This lets a customer see, at a glance,
+    which sources their data is coming from.
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT slug, name, is_active FROM exchanges ORDER BY slug")
+        ).fetchall()
+
+    return [
+        {"slug": row[0], "name": row[1], "is_active": row[2]}
+        for row in rows
+    ]
+
+
+@app.get("/v1/ticker/{symbol}")
+def get_ticker(symbol: str):
+    """
+    Returns the current price of one symbol (e.g. BTCUSDT) from every
+    exchange that has it, so a caller can compare across exchanges
+    in one request rather than asking exchange by exchange.
+    """
+    symbol = symbol.upper()
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT e.slug, e.name, p.price, p.collected_at
+                FROM prices_latest p
+                JOIN exchanges e ON e.id = p.exchange_id
+                WHERE p.symbol = :symbol
+                ORDER BY e.slug
+            """),
+            {"symbol": symbol},
+        ).fetchall()
+
+    if not rows:
+        # A 404 tells the caller clearly "we don't have this symbol",
+        # rather than silently returning an empty list that looks like
+        # something went wrong.
+        raise HTTPException(status_code=404, detail=f"No data found for symbol '{symbol}'")
+
+    return {
+        "symbol": symbol,
+        "exchanges": [
+            {
+                "exchange": row[0],
+                "name": row[1],
+                "price": float(row[2]),
+                "collected_at": row[3].isoformat(),
+            }
+            for row in rows
+        ],
+    }
+
+
+@app.get("/v1/markets")
+def list_markets(exchange: Optional[str] = None):
+    """
+    Returns every symbol currently tracked, optionally filtered to
+    one exchange. This is how a caller discovers what's available
+    before asking for specific prices.
+    """
+    with engine.connect() as conn:
+        if exchange:
+            rows = conn.execute(
+                text("""
+                    SELECT DISTINCT p.symbol, e.slug
+                    FROM prices_latest p
+                    JOIN exchanges e ON e.id = p.exchange_id
+                    WHERE e.slug = :exchange
+                    ORDER BY p.symbol
+                """),
+                {"exchange": exchange},
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                text("""
+                    SELECT DISTINCT p.symbol, e.slug
+                    FROM prices_latest p
+                    JOIN exchanges e ON e.id = p.exchange_id
+                    ORDER BY p.symbol
+                """)
+            ).fetchall()
+
+    return {"count": len(rows), "markets": [{"symbol": r[0], "exchange": r[1]} for r in rows]}
