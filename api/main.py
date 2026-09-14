@@ -74,7 +74,8 @@ def get_ticker(symbol: str):
     with engine.connect() as conn:
         rows = conn.execute(
             text("""
-                SELECT e.slug, e.name, p.price, p.collected_at
+                SELECT e.slug, e.name, p.price, p.bid, p.ask,
+                       p.high_24h, p.low_24h, p.volume_24h, p.collected_at
                 FROM prices_latest p
                 JOIN exchanges e ON e.id = p.exchange_id
                 WHERE p.symbol = :symbol
@@ -89,6 +90,9 @@ def get_ticker(symbol: str):
         # something went wrong.
         raise HTTPException(status_code=404, detail=f"No data found for symbol '{symbol}'")
 
+    def maybe_float(value):
+        return float(value) if value is not None else None
+
     return {
         "symbol": symbol,
         "exchanges": [
@@ -96,7 +100,12 @@ def get_ticker(symbol: str):
                 "exchange": row[0],
                 "name": row[1],
                 "price": float(row[2]),
-                "collected_at": row[3].isoformat(),
+                "bid": maybe_float(row[3]),
+                "ask": maybe_float(row[4]),
+                "high_24h": maybe_float(row[5]),
+                "low_24h": maybe_float(row[6]),
+                "volume_24h": maybe_float(row[7]),
+                "collected_at": row[8].isoformat(),
             }
             for row in rows
         ],

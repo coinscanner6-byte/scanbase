@@ -28,6 +28,14 @@ def fetch():
     tickers = data.get("result", {}).get("list", [])
 
     return [
-        {"symbol": item["symbol"], "price": item["lastPrice"]}
+        {
+            "symbol": item["symbol"],
+            "price": item["lastPrice"],
+            "bid": item.get("bid1Price"),
+            "ask": item.get("ask1Price"),
+            "high_24h": item.get("highPrice24h"),
+            "low_24h": item.get("lowPrice24h"),
+            "volume_24h": item.get("volume24h"),
+        }
         for item in tickers
     ]

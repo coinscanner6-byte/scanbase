@@ -61,11 +61,21 @@ def save_prices(exchange_id, prices, collected_at):
     hour_bucket = collected_at.replace(minute=0, second=0, microsecond=0)
 
     latest_values = [
-        (exchange_id, row["symbol"], row["price"], collected_at)
+        (
+            exchange_id, row["symbol"], row["price"],
+            row.get("bid"), row.get("ask"),
+            row.get("high_24h"), row.get("low_24h"), row.get("volume_24h"),
+            collected_at,
+        )
         for row in prices
     ]
     hourly_values = [
-        (exchange_id, row["symbol"], row["price"], hour_bucket)
+        (
+            exchange_id, row["symbol"], row["price"],
+            row.get("bid"), row.get("ask"),
+            row.get("high_24h"), row.get("low_24h"), row.get("volume_24h"),
+            hour_bucket,
+        )
         for row in prices
     ]
 
@@ -75,17 +85,26 @@ def save_prices(exchange_id, prices, collected_at):
             execute_values(
                 cur,
                 """
-                INSERT INTO prices_latest (exchange_id, symbol, price, collected_at)
+                INSERT INTO prices_latest
+                    (exchange_id, symbol, price, bid, ask, high_24h, low_24h, volume_24h, collected_at)
                 VALUES %s
                 ON CONFLICT (exchange_id, symbol)
-                DO UPDATE SET price = EXCLUDED.price, collected_at = EXCLUDED.collected_at
+                DO UPDATE SET
+                    price = EXCLUDED.price,
+                    bid = EXCLUDED.bid,
+                    ask = EXCLUDED.ask,
+                    high_24h = EXCLUDED.high_24h,
+                    low_24h = EXCLUDED.low_24h,
+                    volume_24h = EXCLUDED.volume_24h,
+                    collected_at = EXCLUDED.collected_at
                 """,
                 latest_values,
             )
             execute_values(
                 cur,
                 """
-                INSERT INTO prices_hourly (exchange_id, symbol, price, hour_bucket)
+                INSERT INTO prices_hourly
+                    (exchange_id, symbol, price, bid, ask, high_24h, low_24h, volume_24h, hour_bucket)
                 VALUES %s
                 ON CONFLICT (exchange_id, symbol, hour_bucket) DO NOTHING
                 """,

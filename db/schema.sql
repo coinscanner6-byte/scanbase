@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS prices_latest (
     exchange_id  INTEGER NOT NULL REFERENCES exchanges(id),
     symbol       TEXT NOT NULL,           -- e.g. "BTCUSDT"
     price        NUMERIC(20, 8) NOT NULL,
+    bid          NUMERIC(20, 8),          -- highest price a buyer is offering
+    ask          NUMERIC(20, 8),          -- lowest price a seller will accept
+    high_24h     NUMERIC(20, 8),          -- highest price in the last 24 hours
+    low_24h      NUMERIC(20, 8),          -- lowest price in the last 24 hours
+    volume_24h   NUMERIC(24, 8),          -- how much has traded in 24 hours
     collected_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (exchange_id, symbol)
 );
@@ -29,6 +34,11 @@ CREATE TABLE IF NOT EXISTS prices_hourly (
     exchange_id  INTEGER NOT NULL REFERENCES exchanges(id),
     symbol       TEXT NOT NULL,
     price        NUMERIC(20, 8) NOT NULL,
+    bid          NUMERIC(20, 8),
+    ask          NUMERIC(20, 8),
+    high_24h     NUMERIC(20, 8),
+    low_24h      NUMERIC(20, 8),
+    volume_24h   NUMERIC(24, 8),
     hour_bucket  TIMESTAMPTZ NOT NULL,
     UNIQUE (exchange_id, symbol, hour_bucket)
 );

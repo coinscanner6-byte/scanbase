@@ -23,6 +23,14 @@ def fetch():
     data = response.json()
 
     return [
-        {"symbol": item["currency_pair"], "price": item["last"]}
+        {
+            "symbol": item["currency_pair"],
+            "price": item["last"],
+            "bid": item.get("highest_bid"),
+            "ask": item.get("lowest_ask"),
+            "high_24h": item.get("high_24h"),
+            "low_24h": item.get("low_24h"),
+            "volume_24h": item.get("base_volume"),
+        }
         for item in data
     ]
