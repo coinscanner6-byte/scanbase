@@ -5,6 +5,8 @@ garbage getting into the database. More checks get added later
 (comparing against other exchanges, flagging frozen prices, etc).
 """
 
+from core.symbols import standardise
+
 
 def is_valid_price(symbol, price):
     """
@@ -70,6 +72,7 @@ def clean_prices(raw_prices):
 
         good.append({
             "symbol": symbol,
+            "symbol_std": standardise(symbol),
             "price": float(price),
             "bid": to_number_or_none(item.get("bid")),
             "ask": to_number_or_none(item.get("ask")),

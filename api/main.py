@@ -26,6 +26,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from fastapi import FastAPI, HTTPException
 from sqlalchemy import text
 from core.db import engine
+from core.symbols import standardise
 
 app = FastAPI(
     title="Scanbase API",
@@ -65,23 +66,27 @@ def list_exchanges():
 @app.get("/v1/ticker/{symbol}")
 def get_ticker(symbol: str):
     """
-    Returns the current price of one symbol (e.g. BTCUSDT) from every
-    exchange that has it, so a caller can compare across exchanges
-    in one request rather than asking exchange by exchange.
+    Returns the current price of one symbol from every exchange that
+    has it.
+
+    You can ask using any common spelling - "BTCUSDT", "BTC-USDT" or
+    "BTC_USDT" all find the same coin, because we match on our own
+    standardised form rather than on whatever each exchange happened
+    to call it.
     """
-    symbol = symbol.upper()
+    wanted = standardise(symbol)
 
     with engine.connect() as conn:
         rows = conn.execute(
             text("""
-                SELECT e.slug, e.name, p.price, p.bid, p.ask,
+                SELECT e.slug, e.name, p.symbol, p.price, p.bid, p.ask,
                        p.high_24h, p.low_24h, p.volume_24h, p.collected_at
                 FROM prices_latest p
                 JOIN exchanges e ON e.id = p.exchange_id
-                WHERE p.symbol = :symbol
+                WHERE p.symbol_std = :wanted
                 ORDER BY e.slug
             """),
-            {"symbol": symbol},
+            {"wanted": wanted},
         ).fetchall()
 
     if not rows:
@@ -94,18 +99,19 @@ def get_ticker(symbol: str):
         return float(value) if value is not None else None
 
     return {
-        "symbol": symbol,
+        "symbol": wanted,
         "exchanges": [
             {
                 "exchange": row[0],
                 "name": row[1],
-                "price": float(row[2]),
-                "bid": maybe_float(row[3]),
-                "ask": maybe_float(row[4]),
-                "high_24h": maybe_float(row[5]),
-                "low_24h": maybe_float(row[6]),
-                "volume_24h": maybe_float(row[7]),
-                "collected_at": row[8].isoformat(),
+                "exchange_symbol": row[2],  # what this exchange actually calls it
+                "price": float(row[3]),
+                "bid": maybe_float(row[4]),
+                "ask": maybe_float(row[5]),
+                "high_24h": maybe_float(row[6]),
+                "low_24h": maybe_float(row[7]),
+                "volume_24h": maybe_float(row[8]),
+                "collected_at": row[9].isoformat(),
             }
             for row in rows
         ],

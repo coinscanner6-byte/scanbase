@@ -62,7 +62,7 @@ def save_prices(exchange_id, prices, collected_at):
 
     latest_values = [
         (
-            exchange_id, row["symbol"], row["price"],
+            exchange_id, row["symbol"], row.get("symbol_std"), row["price"],
             row.get("bid"), row.get("ask"),
             row.get("high_24h"), row.get("low_24h"), row.get("volume_24h"),
             collected_at,
@@ -71,7 +71,7 @@ def save_prices(exchange_id, prices, collected_at):
     ]
     hourly_values = [
         (
-            exchange_id, row["symbol"], row["price"],
+            exchange_id, row["symbol"], row.get("symbol_std"), row["price"],
             row.get("bid"), row.get("ask"),
             row.get("high_24h"), row.get("low_24h"), row.get("volume_24h"),
             hour_bucket,
@@ -86,10 +86,11 @@ def save_prices(exchange_id, prices, collected_at):
                 cur,
                 """
                 INSERT INTO prices_latest
-                    (exchange_id, symbol, price, bid, ask, high_24h, low_24h, volume_24h, collected_at)
+                    (exchange_id, symbol, symbol_std, price, bid, ask, high_24h, low_24h, volume_24h, collected_at)
                 VALUES %s
                 ON CONFLICT (exchange_id, symbol)
                 DO UPDATE SET
+                    symbol_std = EXCLUDED.symbol_std,
                     price = EXCLUDED.price,
                     bid = EXCLUDED.bid,
                     ask = EXCLUDED.ask,
@@ -104,7 +105,7 @@ def save_prices(exchange_id, prices, collected_at):
                 cur,
                 """
                 INSERT INTO prices_hourly
-                    (exchange_id, symbol, price, bid, ask, high_24h, low_24h, volume_24h, hour_bucket)
+                    (exchange_id, symbol, symbol_std, price, bid, ask, high_24h, low_24h, volume_24h, hour_bucket)
                 VALUES %s
                 ON CONFLICT (exchange_id, symbol, hour_bucket) DO NOTHING
                 """,
