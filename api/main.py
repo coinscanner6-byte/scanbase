@@ -23,10 +23,11 @@ from typing import Optional
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from sqlalchemy import text
 from core.db import engine
 from core.symbols import standardise
+from core.auth import check_key
 
 app = FastAPI(
     title="Scanbase API",
@@ -35,23 +36,51 @@ app = FastAPI(
 )
 
 
+def require_key(api_key):
+    """
+    Checks the caller's key before we do any real work, and raises the
+    right error if there's a problem.
+
+    401 means "we don't know who you are" - wrong or missing key.
+    429 means "we know you, but slow down" - over the hourly limit.
+    Those are different problems and callers need to tell them apart.
+    """
+    result = check_key(api_key)
+
+    if result["ok"]:
+        return result
+
+    if result["reason"] == "rate_limited":
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Try again next hour.",
+        )
+
+    raise HTTPException(
+        status_code=401,
+        detail="Missing or invalid API key. Send it in the 'X-API-Key' header.",
+    )
+
+
 @app.get("/v1/health")
 def health():
     """
-    A simple 'are you alive' check. Used by Railway and by anyone
-    integrating with the API to confirm it's actually responding
-    before trying anything more complicated.
+    A simple 'are you alive' check. Deliberately left open with no key
+    required, because monitoring tools and Railway itself need to check
+    this without credentials. It reveals nothing sensitive.
     """
     return {"status": "ok"}
 
 
 @app.get("/v1/exchanges")
-def list_exchanges():
+def list_exchanges(x_api_key: Optional[str] = Header(None)):
     """
     Returns every exchange we collect from, and whether each one is
     currently marked active. This lets a customer see, at a glance,
     which sources their data is coming from.
     """
+    require_key(x_api_key)
+
     with engine.connect() as conn:
         rows = conn.execute(
             text("SELECT slug, name, is_active FROM exchanges ORDER BY slug")
@@ -64,7 +93,7 @@ def list_exchanges():
 
 
 @app.get("/v1/ticker/{symbol}")
-def get_ticker(symbol: str):
+def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None)):
     """
     Returns the current price of one symbol from every exchange that
     has it.
@@ -74,6 +103,8 @@ def get_ticker(symbol: str):
     standardised form rather than on whatever each exchange happened
     to call it.
     """
+    require_key(x_api_key)
+
     wanted = standardise(symbol)
 
     with engine.connect() as conn:
@@ -119,12 +150,14 @@ def get_ticker(symbol: str):
 
 
 @app.get("/v1/markets")
-def list_markets(exchange: Optional[str] = None):
+def list_markets(exchange: Optional[str] = None, x_api_key: Optional[str] = Header(None)):
     """
     Returns every symbol currently tracked, optionally filtered to
     one exchange. This is how a caller discovers what's available
     before asking for specific prices.
     """
+    require_key(x_api_key)
+
     with engine.connect() as conn:
         if exchange:
             rows = conn.execute(
