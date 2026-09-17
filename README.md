@@ -52,6 +52,7 @@ Interactive docs: `https://scanbase-api.up.railway.app/docs`
 | `GET /v1/status` | Yes | Whether each exchange is working, last error |
 | `GET /v1/ticker/{symbol}` | Yes | Price of one pair on every exchange, with age and `is_stale` |
 | `GET /v1/markets?exchange=` | Yes | Every tracked pair |
+| `GET /v1/history/{symbol}?interval=hour\|day&days=7&exchange=` | Yes | Past prices: hourly (90 days) or daily open/high/low/close |
 
 Keys go in the `X-API-Key` header. `401` = bad key, `429` = over hourly limit.
 
