@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 
-from shared.config import HOURLY_KEEP_DAYS
+from shared.config import HOURLY_KEEP_DAYS, CANDLE_HOURLY_KEEP_DAYS
 from storage.db import engine
 
 DELETE_BATCH = 50_000
@@ -72,7 +72,30 @@ def cleanup(log=print):
 
     log(f"  cleanup: cutoff {cutoff.date()}, {summarised} daily rows added, "
         f"{deleted} hourly rows removed")
+    cleanup_candles_and_stats(log)
     return summarised, deleted
+
+
+def cleanup_candles_and_stats(log=print):
+    """Official-price candles: hourly -> daily after 90 days. Stats kept 90 days."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=CANDLE_HOURLY_KEEP_DAYS)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    with engine.begin() as conn:
+        rolled = conn.execute(text("""
+            INSERT INTO index_candles_1d (base, currency, day, open, high, low, close, samples)
+            SELECT base, currency, (hour AT TIME ZONE 'UTC')::date,
+                   (ARRAY_AGG(open ORDER BY hour ASC))[1], MAX(high), MIN(low),
+                   (ARRAY_AGG(close ORDER BY hour DESC))[1], SUM(samples)
+            FROM index_candles_1h
+            WHERE hour < :cutoff
+            GROUP BY base, currency, (hour AT TIME ZONE 'UTC')::date
+            ON CONFLICT (base, currency, day) DO NOTHING
+        """), {"cutoff": cutoff}).rowcount
+        removed = conn.execute(text("DELETE FROM index_candles_1h WHERE hour < :cutoff"),
+                               {"cutoff": cutoff}).rowcount
+        stats = conn.execute(text("DELETE FROM exchange_daily_stats WHERE day < :d"),
+                             {"d": cutoff.date()}).rowcount
+    log(f"  candles: {rolled} daily added, {removed} hourly removed; {stats} old stats removed")
 
 
 def _unwanted_where():

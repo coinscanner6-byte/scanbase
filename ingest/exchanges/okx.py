@@ -21,6 +21,7 @@ class OKX(Exchange):
         "high_24h": "high24h",
         "low_24h": "low24h",
         "volume_24h": "vol24h",
+        "exchange_time": "ts",
     }
 
     def extract(self, data):

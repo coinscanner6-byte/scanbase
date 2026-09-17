@@ -29,6 +29,8 @@ flowchart LR
 
     EX --> C --> V --> P
     P --> L & H & S
+    P -->|official prices| IX[(index_latest +<br/>index candles)]
+    P -->|daily stats| Q[(exchange_daily_stats)]
     H -->|daily clean-up| D
     CL[CoinScanner and<br/>other customers] -->|X-API-Key| AU --> E
     AU <--> K
@@ -50,6 +52,12 @@ flowchart LR
 | Bad main price → drop row; bad extra field → keep row | Never save wrong prices, never lose good ones over a missing bid |
 | One exchange failing never stops the round | Failure is logged to `exchange_status` and shown in `/v1/status` |
 | Every price carries `age_seconds` and `is_stale` | Customers never mistake old data for live data |
+| Official price = outlier filter + volume-weighted average | Same principle the big aggregators publish; one bad exchange can't move it |
+| Separate USD and INR official prices | Indian prices carry a premium; mixing would distort the global price |
+| Official prices built from the round's data in memory | No extra database reads; almost no extra cost |
+| Candles only for listed coins | Keeps writes and storage small |
+| Exchange rating from our own stats | Independent of what exchanges claim about themselves |
+| Stored both exchange time and our time | Shows delays at the source |
 | API keys stored only as SHA-256 hashes | A database leak exposes no usable keys |
 | Rate limit counted per key per hour in one DB trip | Accurate under parallel requests, table stays small |
 | Migrations numbered and re-runnable | Same command safely updates any database |

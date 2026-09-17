@@ -64,3 +64,25 @@ CLEANUP_EVERY_HOURS = _int("CLEANUP_EVERY_HOURS", 24)
 
 # The API's public address, used to build full logo links.
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://scanbase-api.up.railway.app").rstrip("/")
+
+# ---------- data quality (Batch 1) ----------
+
+# A buy/sell gap wider than this (%) flags the price as "wide_spread".
+WIDE_SPREAD_PCT = float(os.getenv("WIDE_SPREAD_PCT", "2"))
+
+# Less than this traded in 24h (in US dollars) flags "thin_volume".
+THIN_VOLUME_USD = _int("THIN_VOLUME_USD", 1000)
+
+# Outlier cut-off (modified z-score). 3.5 is the standard value.
+OUTLIER_Z = float(os.getenv("OUTLIER_Z", "3.5"))
+
+# A price within this % of the middle price is never an outlier - normal
+# differences between exchanges (Indian ones often differ by 1-2%).
+OUTLIER_MIN_PCT = float(os.getenv("OUTLIER_MIN_PCT", "2"))
+
+# If an exchange suddenly returns less than this share of its usual
+# number of pairs, a "possible API change" warning is recorded.
+BREAKAGE_DROP = float(os.getenv("BREAKAGE_DROP", "0.5"))
+
+# Official-price candles are kept hourly for this many days, then daily.
+CANDLE_HOURLY_KEEP_DAYS = _int("CANDLE_HOURLY_KEEP_DAYS", 90)

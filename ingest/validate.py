@@ -51,6 +51,29 @@ def to_number_or_none(value):
 
 
 
+def to_time(value):
+    """
+    Exchange timestamps come in seconds or milliseconds. Returns a UTC
+    datetime, or None if missing or unrealistic (before 2020 or in the future).
+    """
+    from datetime import datetime, timezone, timedelta
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number > 1e14:        # microseconds
+        number /= 1_000_000
+    elif number > 1e11:      # milliseconds
+        number /= 1000
+    try:
+        moment = datetime.fromtimestamp(number, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    if moment.year < 2020 or moment > datetime.now(timezone.utc) + timedelta(hours=1):
+        return None
+    return moment
+
+
 def pick_price(last, bid, ask, source):
     """
     Returns (price, price_source).
@@ -107,6 +130,7 @@ def clean_prices(raw_prices):
             "high_24h": to_number_or_none(item.get("high_24h")),
             "low_24h": to_number_or_none(item.get("low_24h")),
             "volume_24h": to_number_or_none(item.get("volume_24h")),
+            "exchange_time": to_time(item.get("exchange_time")),
         })
 
     return good
