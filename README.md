@@ -32,6 +32,8 @@ scanbase/
 ├── serve/                  ISSUING data
 │   ├── main.py             the API endpoints (Railway service 2)
 │   ├── logos.py            logo links + generated placeholder
+│   ├── markets.py          India premium + best price calculations
+│   ├── coin_format.py      cleans coin info before sending
 │   └── auth.py             API keys (stored hashed) + rate limits
 │
 ├── shared/config.py        every setting in one place
@@ -58,6 +60,9 @@ Interactive docs: `https://scanbase-api.up.railway.app/docs`
 | `GET /v1/coins?search=&limit=&offset=` | Yes | Coin list with logo links |
 | `GET /v1/coins/{slug or symbol}` | Yes | Full coin info + live USDT price and market cap |
 | `GET /v1/logos/{symbol}` | No | Logo image (generated circle if none) — usable in `<img>` |
+| `GET /v1/premium` | Yes | India premium for every INR coin |
+| `GET /v1/premium/{base}` | Yes | India premium for one coin (e.g. BTC) |
+| `GET /v1/best/{symbol}?country=IN\|GLOBAL` | Yes | Cheapest place to buy, best place to sell |
 | `GET /v1/history/{symbol}?interval=hour\|day&days=7&exchange=` | Yes | Past prices: hourly (90 days) or daily open/high/low/close |
 
 Keys go in the `X-API-Key` header. `401` = bad key, `429` = over hourly limit.

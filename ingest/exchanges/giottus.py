@@ -39,4 +39,5 @@ class Giottus(Exchange):
             return None
         row["bid"], row["ask"] = bid, ask
         row["price"] = (bid + ask) / 2
+        row["price_source"] = "midpoint"
         return row

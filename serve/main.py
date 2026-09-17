@@ -26,6 +26,7 @@ from ingest.symbols import standardise
 from serve.auth import check_key
 from serve.logos import logo_url, placeholder_svg
 from serve.coin_format import public_description, clean_links
+from serve.markets import compute_premium, premium_table, rank_best
 
 app = FastAPI(
     title="CoinScanner API",
@@ -33,7 +34,7 @@ app = FastAPI(
         "Live crypto prices collected from multiple exchanges, in one "
         "standard format. Send your key in the `X-API-Key` header."
     ),
-    version="0.5.0",
+    version="0.6.0",
 )
 
 
@@ -147,7 +148,8 @@ def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None)):
         rows = conn.execute(
             text("""
                 SELECT e.slug, e.name, p.symbol, p.price, p.bid, p.ask,
-                       p.high_24h, p.low_24h, p.volume_24h, p.collected_at
+                       p.high_24h, p.low_24h, p.volume_24h, p.collected_at,
+                       p.price_source
                 FROM prices_latest p
                 JOIN exchanges e ON e.id = p.exchange_id
                 WHERE p.symbol_std = :wanted
@@ -168,6 +170,7 @@ def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None)):
             "name": r[1],
             "exchange_symbol": r[2],   # what this exchange itself calls it
             "price": num(r[3]),
+            "price_source": r[10],     # last_trade or midpoint
             "bid": num(r[4]),
             "ask": num(r[5]),
             "high_24h": num(r[6]),
@@ -452,3 +455,89 @@ def get_logo(symbol: str):
 
     return Response(content=placeholder_svg(wanted), media_type="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=3600"})
+
+
+
+# ---------- comparisons: India premium and best price ----------
+
+def fresh_rows(conn, where="", params=None):
+    """Live prices that are not stale, with each exchange's country."""
+    rows = conn.execute(text(f"""
+        SELECT e.slug, e.name, e.country, p.symbol_std, p.price, p.bid, p.ask, p.price_source
+        FROM prices_latest p
+        JOIN exchanges e ON e.id = p.exchange_id
+        WHERE e.is_active = TRUE
+          AND p.collected_at >= NOW() - make_interval(secs => :stale)
+          {where}
+    """), {"stale": STALE_AFTER_SECONDS, **(params or {})}).fetchall()
+    return [
+        {"exchange": r[0], "name": r[1], "country": r[2], "symbol_std": r[3],
+         "price": float(r[4]), "bid": num(r[5]), "ask": num(r[6]), "price_source": r[7]}
+        for r in rows
+    ]
+
+
+@app.get("/v1/premium")
+def list_premium(
+    min_india: int = Query(1, ge=1, le=10, description="Minimum Indian exchanges with the coin"),
+    min_global: int = Query(1, ge=1, le=10, description="Minimum global exchanges with the coin"),
+    sort: str = Query("premium", pattern="^(premium|base)$"),
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    India premium for every coin traded in INR: how much more (or less)
+    it costs in India than on global exchanges, converted at the
+    USDT-INR rate on Indian exchanges.
+    """
+    require_key(x_api_key)
+    with engine.connect() as conn:
+        rows = fresh_rows(conn, "AND (p.symbol_std LIKE '%-INR' OR p.symbol_std LIKE '%-USDT')")
+
+    table = premium_table(rows, min_india, min_global)
+    if sort == "premium":
+        table.sort(key=lambda p: -abs(p["premium_pct"]))
+    usdt_inr = table[0]["usdt_inr"]["rate"] if table else None
+    return {"usdt_inr": usdt_inr, "count": len(table), "coins": table}
+
+
+@app.get("/v1/premium/{base}")
+def get_premium(base: str, x_api_key: Optional[str] = Header(None)):
+    """India premium for one coin, e.g. BTC."""
+    require_key(x_api_key)
+    wanted = base.strip().upper()
+    with engine.connect() as conn:
+        rows = fresh_rows(conn, "AND p.symbol_std IN (:inr, :usdt, 'USDT-INR')",
+                          {"inr": f"{wanted}-INR", "usdt": f"{wanted}-USDT"})
+    result = compute_premium(wanted, rows)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Can't compare '{wanted}': it needs a fresh INR price on an Indian "
+                   f"exchange and a USDT price on a global one.",
+        )
+    return result
+
+
+@app.get("/v1/best/{symbol}")
+def best_price(
+    symbol: str,
+    country: Optional[str] = Query(None, pattern="^(IN|GLOBAL)$",
+                                   description="Only Indian (IN) or only global exchanges"),
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    Where to buy a pair cheapest and sell it highest right now.
+    Example: BTCINR (Indian exchanges) or BTCUSDT (global).
+    """
+    require_key(x_api_key)
+    wanted = standardise(symbol)
+    where = "AND p.symbol_std = :wanted"
+    params = {"wanted": wanted}
+    if country:
+        where += " AND e.country = :country"
+        params["country"] = country
+    with engine.connect() as conn:
+        rows = fresh_rows(conn, where, params)
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No fresh prices for '{symbol}'")
+    return {"symbol": wanted, "exchange_count": len(rows), **rank_best(rows)}
