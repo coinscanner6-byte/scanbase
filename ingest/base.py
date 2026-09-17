@@ -22,6 +22,7 @@ new file by itself. Nothing else needs to change.
 import httpx
 
 from shared.config import DEFAULT_TIMEOUT_SECONDS
+from ingest.symbols import standardise
 
 # Our standard names. Every exchange gets translated into exactly these.
 STANDARD_FIELDS = ("symbol", "price", "bid", "ask", "high_24h", "low_24h", "volume_24h")
@@ -36,6 +37,10 @@ class Exchange:
     # Map of OUR name -> THEIR name. "symbol" and "price" are required.
     FIELDS = {}
 
+    # If set, only pairs priced in these currencies are kept, e.g. ("INR",).
+    # Used when an exchange's other pairs just copy another exchange.
+    ONLY_QUOTES = None
+
     def extract(self, data):
         """
         Returns the list of tickers from the exchange's reply. Most
@@ -44,9 +49,21 @@ class Exchange:
         """
         return data
 
+    def adjust(self, row, item):
+        """
+        Optional per-exchange fix-up after the fields are translated.
+        'row' is our standard dict, 'item' is the exchange's original.
+        Return the (changed) row, or None to skip this pair.
+        """
+        return row
+
+    # Some exchanges refuse requests with no browser-style name.
+    HEADERS = {"User-Agent": "Mozilla/5.0 (Scanbase market data)", "Accept": "application/json"}
+
     def fetch_raw(self):
         """Makes the actual internet call. Kept separate so tests can skip it."""
-        response = httpx.get(self.URL, timeout=self.TIMEOUT)
+        response = httpx.get(self.URL, timeout=self.TIMEOUT, headers=self.HEADERS,
+                             follow_redirects=True)
         response.raise_for_status()
         return response.json()
 
@@ -56,7 +73,15 @@ class Exchange:
         for item in self.extract(data) or []:
             if not isinstance(item, dict):
                 continue
-            rows.append({ours: item.get(theirs) for ours, theirs in self.FIELDS.items()})
+            row = {ours: item.get(theirs) for ours, theirs in self.FIELDS.items()}
+            row = self.adjust(row, item)
+            if row is None:
+                continue
+            if self.ONLY_QUOTES:
+                std = standardise(row.get("symbol") or "")
+                if not std or std.rsplit("-", 1)[-1] not in self.ONLY_QUOTES:
+                    continue
+            rows.append(row)
         return rows
 
     def fetch(self):
