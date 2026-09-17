@@ -1,1 +1,1 @@
-worker: python3 scripts/run_forever.py
+worker: python3 -m ingest.worker

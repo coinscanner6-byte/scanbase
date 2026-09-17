@@ -5,7 +5,7 @@ garbage getting into the database. More checks get added later
 (comparing against other exchanges, flagging frozen prices, etc).
 """
 
-from core.symbols import standardise
+from ingest.symbols import standardise
 
 
 def is_valid_price(symbol, price):

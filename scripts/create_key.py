@@ -2,7 +2,8 @@
 Creates a new API key for a customer.
 
 Run with:
-    python3 scripts/create_key.py "CoinScanner"
+    python3 -m scripts.create_key "CoinScanner"
+    python3 -m scripts.create_key "CoinScanner" 5000   (custom hourly limit)
 
 The key is printed ONCE and never stored in plain form. Copy it
 immediately - if it's lost, you cannot recover it, you can only
@@ -10,23 +11,21 @@ create a new one.
 """
 
 import sys
-import os
-
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from sqlalchemy import text
-from core.db import engine
-from core.auth import generate_key, hash_key
+from storage.db import engine
+from serve.auth import generate_key, hash_key
+from shared.config import DEFAULT_RATE_LIMIT
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 scripts/create_key.py \"Customer Name\"")
-        print("Example: python3 scripts/create_key.py \"CoinScanner\"")
+        print("Usage: python3 -m scripts.create_key \"Customer Name\" [hourly_limit]")
+        print("Example: python3 -m scripts.create_key \"CoinScanner\"")
         sys.exit(1)
 
     name = sys.argv[1]
-    rate_limit = int(sys.argv[2]) if len(sys.argv) > 2 else 1000
+    rate_limit = int(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_RATE_LIMIT
 
     raw_key = generate_key()
 
