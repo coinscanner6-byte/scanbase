@@ -32,7 +32,7 @@ app = FastAPI(
         "Live crypto prices collected from multiple exchanges, in one "
         "standard format. Send your key in the `X-API-Key` header."
     ),
-    version="0.4.0",
+    version="0.4.1",
 )
 
 
@@ -319,6 +319,26 @@ def day(value):
     return value.isoformat() if value else None
 
 
+def public_description(desc):
+    """Hides internal fields (e.g. draft_source) - only summary and sections go out."""
+    if not isinstance(desc, dict):
+        return desc
+    return {k: v for k, v in desc.items() if k in ("summary", "sections")}
+
+
+def clean_links(links):
+    """Drops empty links like "telegram": "" and empty entries inside lists."""
+    if not isinstance(links, dict):
+        return links
+    out = {}
+    for key, value in links.items():
+        if isinstance(value, list):
+            value = [v for v in value if v]
+        if value:
+            out[key] = value
+    return out
+
+
 @app.get("/v1/coins")
 def list_coins(
     search: Optional[str] = Query(None, description="Match name, symbol or slug"),
@@ -399,8 +419,8 @@ def get_coin(coin: str, x_api_key: Optional[str] = Header(None)):
         "rank": row["rank"],
         "logo_url": logo_url(row["symbol"]),
         "categories": row["categories"] or [],
-        "description": row["description"],
-        "links": row["links"],
+        "description": public_description(row["description"]),
+        "links": clean_links(row["links"]),
         "contract_addresses": row["contract_addresses"] or {},
         "genesis_date": day(row["genesis_date"]),
         "supply": {
