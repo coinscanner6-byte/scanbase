@@ -27,6 +27,8 @@ from serve.auth import check_key
 from serve.logos import logo_url, placeholder_svg
 from serve.coin_format import public_description, clean_links
 from serve.markets import compute_premium, premium_table, rank_best
+from serve.quality_score import score_exchange
+from ingest.quality import price_flags, aggregate, group_key
 
 app = FastAPI(
     title="CoinScanner API",
@@ -34,7 +36,7 @@ app = FastAPI(
         "Live crypto prices collected from multiple exchanges, in one "
         "standard format. Send your key in the `X-API-Key` header."
     ),
-    version="0.7.0",
+    version="0.8.0",
 )
 
 
@@ -80,15 +82,43 @@ def health():
         raise HTTPException(status_code=503, detail={"status": "degraded", "database": "unreachable"})
 
 
+QUALITY_SQL = """
+    SELECT e.slug,
+           SUM(d.rounds_ok), SUM(d.rounds_failed), SUM(d.pairs_sum), SUM(d.wide_sum),
+           SUM(d.thin_sum), SUM(d.midpoint_sum), SUM(d.outlier_sum),
+           SUM(d.dev_sum), SUM(d.dev_n)
+    FROM exchange_daily_stats d
+    JOIN exchanges e ON e.id = d.exchange_id
+    WHERE d.day >= CURRENT_DATE - 6
+    GROUP BY e.slug
+"""
+
+
+def quality_by_exchange(conn):
+    out = {}
+    for r in conn.execute(text(QUALITY_SQL)).fetchall():
+        out[r[0]] = score_exchange({
+            "rounds_ok": r[1], "rounds_failed": r[2], "pairs_sum": r[3], "wide_sum": r[4],
+            "thin_sum": r[5], "midpoint_sum": r[6], "outlier_sum": r[7],
+            "dev_sum": r[8], "dev_n": r[9],
+        })
+    return out
+
+
 @app.get("/v1/exchanges")
 def list_exchanges(x_api_key: Optional[str] = Header(None)):
-    """Every exchange we collect from."""
+    """
+    Every exchange we collect from, with our quality rating (last 7 days).
+    quality is null until an exchange has enough data (30+ rounds).
+    """
     require_key(x_api_key)
     with engine.connect() as conn:
         rows = conn.execute(
             text("SELECT slug, name, is_active, country FROM exchanges ORDER BY slug")
         ).fetchall()
-    return [{"slug": r[0], "name": r[1], "is_active": r[2], "country": r[3]} for r in rows]
+        quality = quality_by_exchange(conn)
+    return [{"slug": r[0], "name": r[1], "is_active": r[2], "country": r[3],
+             "quality": quality.get(r[0])} for r in rows]
 
 
 @app.get("/v1/status")
@@ -103,7 +133,7 @@ def exchange_status(x_api_key: Optional[str] = Header(None)):
         rows = conn.execute(
             text("""
                 SELECT e.slug, e.name, s.last_success_at, s.last_saved_count,
-                       s.last_error_at, s.last_error
+                       s.last_error_at, s.last_error, s.last_warning_at, s.last_warning
                 FROM exchanges e
                 LEFT JOIN exchange_status s ON s.exchange_id = e.id
                 WHERE e.is_active = TRUE
@@ -112,7 +142,7 @@ def exchange_status(x_api_key: Optional[str] = Header(None)):
         ).fetchall()
 
     result = []
-    for slug, name, ok_at, count, err_at, err in rows:
+    for slug, name, ok_at, count, err_at, err, warn_at, warn in rows:
         age = age_in_seconds(ok_at, now)
         healthy = age is not None and age <= STALE_AFTER_SECONDS
         result.append({
@@ -124,6 +154,9 @@ def exchange_status(x_api_key: Optional[str] = Header(None)):
             "last_saved_count": count,
             "last_error_at": err_at.isoformat() if err_at else None,
             "last_error": err,
+            # warnings older than a day are hidden
+            "warning": warn if warn_at and (now - warn_at).total_seconds() < 86400 else None,
+            "warning_at": warn_at.isoformat() if warn_at and (now - warn_at).total_seconds() < 86400 else None,
         })
 
     return {
@@ -134,12 +167,37 @@ def exchange_status(x_api_key: Optional[str] = Header(None)):
     }
 
 
+def usdt_inr_rate(conn):
+    r = conn.execute(text(
+        "SELECT price FROM index_latest WHERE base = 'USDT' AND currency = 'INR'"
+    )).scalar()
+    return float(r) if r else None
+
+
+def index_row_to_dict(r, now):
+    age = age_in_seconds(r["updated_at"], now)
+    return {
+        "price": float(r["price"]),
+        "currency": r["currency"],
+        "confidence": r["confidence"],
+        "sources": r["sources"],
+        "exchanges_used": list(r["kept"]),
+        "exchanges_excluded": r["excluded"] or {},
+        "volume_24h_quote": num(r["volume_quote"]),
+        "updated_at": r["updated_at"].isoformat(),
+        "age_seconds": age,
+        "is_stale": age > STALE_AFTER_SECONDS,
+    }
+
+
 @app.get("/v1/ticker/{symbol}")
 def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None)):
     """
-    Current price of one pair from every exchange that has it.
+    Current price of one pair on every exchange that has it, with
+    quality flags, plus the official Scanbase price where one applies.
+
+    Flags: wide_spread, thin_volume, no_volume, estimated_price, outlier.
     Any spelling works: BTCUSDT, BTC-USDT, BTC_USDT.
-    Each price says how old it is and whether it's stale.
     """
     require_key(x_api_key)
     wanted = standardise(symbol)
@@ -149,7 +207,7 @@ def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None)):
             text("""
                 SELECT e.slug, e.name, p.symbol, p.price, p.bid, p.ask,
                        p.high_24h, p.low_24h, p.volume_24h, p.collected_at,
-                       p.price_source
+                       p.price_source, p.exchange_time, e.country
                 FROM prices_latest p
                 JOIN exchanges e ON e.id = p.exchange_id
                 WHERE p.symbol_std = :wanted
@@ -157,6 +215,12 @@ def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None)):
             """),
             {"wanted": wanted},
         ).fetchall()
+        usdt_inr = usdt_inr_rate(conn)
+        base, quote = (wanted.rsplit("-", 1) + [None])[:2] if "-" in wanted else (wanted, None)
+        currency = "INR" if quote == "INR" else "USD" if quote in ("USDT", "USDC") else None
+        official = conn.execute(text(
+            "SELECT * FROM index_latest WHERE base = :b AND currency = :c"
+        ), {"b": base, "c": currency}).mappings().first() if currency else None
 
     if not rows:
         raise HTTPException(status_code=404, detail=f"No data found for symbol '{symbol}'")
@@ -165,50 +229,73 @@ def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None)):
     exchanges = []
     for r in rows:
         age = age_in_seconds(r[9], now)
+        row = {"symbol_std": wanted, "price": float(r[3]), "bid": num(r[4]), "ask": num(r[5]),
+               "volume_24h": num(r[8]), "price_source": r[10]}
         exchanges.append({
             "exchange": r[0],
             "name": r[1],
-            "exchange_symbol": r[2],   # what this exchange itself calls it
-            "price": num(r[3]),
-            "price_source": r[10],     # last_trade or midpoint
-            "bid": num(r[4]),
-            "ask": num(r[5]),
+            "country": r[12],
+            "exchange_symbol": r[2],
+            "price": row["price"],
+            "price_source": r[10],
+            "bid": row["bid"],
+            "ask": row["ask"],
             "high_24h": num(r[6]),
             "low_24h": num(r[7]),
-            "volume_24h": num(r[8]),
+            "volume_24h": row["volume_24h"],
+            "flags": price_flags(row, usdt_inr),
             "collected_at": r[9].isoformat(),
+            "exchange_time": r[11].isoformat() if r[11] else None,
             "age_seconds": age,
             "is_stale": age > STALE_AFTER_SECONDS,
         })
 
+    # Mark outliers among the fresh prices, the same way the official price does.
+    fresh = [e for e in exchanges if not e["is_stale"]]
+    result = aggregate([{"exchange": e["exchange"], "price": e["price"],
+                         "volume": e["volume_24h"], "flags": e["flags"]} for e in fresh])
+    if result:
+        for e in fresh:
+            if result["excluded"].get(e["exchange"]) == "outlier":
+                e["flags"].append("outlier")
+
     return {
         "symbol": wanted,
         "exchange_count": len(exchanges),
-        "fresh_count": sum(1 for e in exchanges if not e["is_stale"]),
+        "fresh_count": len(fresh),
+        "official_price": index_row_to_dict(official, now) if official else None,
         "exchanges": exchanges,
     }
 
 
 @app.get("/v1/markets")
-def list_markets(exchange: Optional[str] = None, x_api_key: Optional[str] = Header(None)):
-    """Every pair currently tracked, optionally for one exchange."""
+def list_markets(
+    exchange: Optional[str] = None,
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Every pair currently tracked, optionally for one exchange. Paged."""
     require_key(x_api_key)
-
-    sql = """
-        SELECT p.symbol, p.symbol_std, e.slug
-        FROM prices_latest p
-        JOIN exchanges e ON e.id = p.exchange_id
-        {where}
-        ORDER BY p.symbol_std, e.slug
-    """
+    where = "WHERE e.slug = :exchange" if exchange else ""
+    params = {"exchange": exchange, "limit": limit, "offset": offset}
     with engine.connect() as conn:
-        if exchange:
-            rows = conn.execute(text(sql.format(where="WHERE e.slug = :exchange")),
-                                {"exchange": exchange}).fetchall()
-        else:
-            rows = conn.execute(text(sql.format(where=""))).fetchall()
+        total = conn.execute(text(f"""
+            SELECT count(*) FROM prices_latest p JOIN exchanges e ON e.id = p.exchange_id {where}
+        """), params).scalar()
+        rows = conn.execute(text(f"""
+            SELECT p.symbol, p.symbol_std, e.slug
+            FROM prices_latest p
+            JOIN exchanges e ON e.id = p.exchange_id
+            {where}
+            ORDER BY p.symbol_std, e.slug
+            LIMIT :limit OFFSET :offset
+        """), params).fetchall()
 
     return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
         "count": len(rows),
         "markets": [{"symbol": r[1], "exchange_symbol": r[0], "exchange": r[2]} for r in rows],
     }
@@ -545,3 +632,225 @@ def best_price(
     if not rows:
         raise HTTPException(status_code=404, detail=f"No fresh prices for '{symbol}'")
     return {"symbol": wanted, "exchange_count": len(rows), **rank_best(rows)}
+
+
+
+# ---------- official prices and candles ----------
+
+def resolve_coin(conn, coin):
+    """slug or symbol -> (slug or None, SYMBOL). Best-ranked coin wins a shared symbol."""
+    c = coin.strip()
+    row = conn.execute(text("""
+        SELECT slug, UPPER(symbol) FROM coins
+        WHERE slug = LOWER(:c) OR UPPER(symbol) = UPPER(:c)
+        ORDER BY (slug = LOWER(:c)) DESC, rank NULLS LAST
+        LIMIT 1
+    """), {"c": c}).fetchone()
+    if row:
+        return row[0], row[1]
+    return None, c.upper()
+
+
+@app.get("/v1/prices")
+def list_prices(
+    currency: str = Query("usd", description="usd or inr"),
+    symbols: Optional[str] = Query(None, description="Comma-separated, e.g. BTC,ETH"),
+    listed_only: bool = Query(True, description="Only coins with a coin page"),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    Official Scanbase prices. USD comes from global exchanges only,
+    INR from Indian exchanges only. Best-ranked coins first.
+    """
+    require_key(x_api_key)
+    cur = currency.strip().upper()
+    if cur not in ("USD", "INR"):
+        raise HTTPException(status_code=400, detail="currency must be usd or inr")
+
+    where = ["i.currency = :cur"]
+    params = {"cur": cur, "limit": limit, "offset": offset}
+    if symbols:
+        wanted = [x.strip().upper() for x in symbols.split(",") if x.strip()][:200]
+        where.append("i.base = ANY(:syms)")
+        params["syms"] = wanted
+    if listed_only:
+        where.append("c.slug IS NOT NULL")
+    where_sql = " AND ".join(where)
+
+    base_sql = f"""
+        FROM index_latest i
+        LEFT JOIN LATERAL (
+            SELECT slug, name, rank FROM coins
+            WHERE UPPER(symbol) = i.base AND is_active = TRUE
+            ORDER BY rank NULLS LAST LIMIT 1
+        ) c ON TRUE
+        WHERE {where_sql}
+    """
+    with engine.connect() as conn:
+        total = conn.execute(text(f"SELECT count(*) {base_sql}"), params).scalar()
+        rows = conn.execute(text(f"""
+            SELECT i.*, c.slug, c.name, c.rank {base_sql}
+            ORDER BY c.rank NULLS LAST, i.volume_quote DESC NULLS LAST, i.base
+            LIMIT :limit OFFSET :offset
+        """), params).mappings().all()
+
+    now = datetime.now(timezone.utc)
+    return {
+        "currency": cur,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "prices": [
+            {"symbol": r["base"], "coin_id": r["slug"], "name": r["name"], "rank": r["rank"],
+             "logo_url": logo_url(r["base"]), **index_row_to_dict(r, now)}
+            for r in rows
+        ],
+    }
+
+
+@app.get("/v1/prices/{coin}")
+def get_price(coin: str, x_api_key: Optional[str] = Header(None)):
+    """
+    Official USD and INR price for one coin (slug like "bitcoin" or
+    symbol like "BTC"), plus the India premium between them.
+    """
+    require_key(x_api_key)
+    with engine.connect() as conn:
+        slug, symbol = resolve_coin(conn, coin)
+        rows = conn.execute(text(
+            "SELECT * FROM index_latest WHERE base = :b"
+        ), {"b": symbol}).mappings().all()
+        usdt_inr = usdt_inr_rate(conn)
+
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No official price for '{coin}'")
+
+    now = datetime.now(timezone.utc)
+    by_cur = {r["currency"]: index_row_to_dict(r, now) for r in rows}
+    usd, inr = by_cur.get("USD"), by_cur.get("INR")
+    premium = None
+    if usd and inr and usdt_inr:
+        premium = round((inr["price"] / (usd["price"] * usdt_inr) - 1) * 100, 3)
+
+    return {
+        "symbol": symbol,
+        "coin_id": slug,
+        "logo_url": logo_url(symbol),
+        "usd": usd,
+        "inr": inr,
+        "usdt_inr": usdt_inr,
+        "india_premium_pct": premium,
+    }
+
+
+@app.get("/v1/candles/{coin}")
+def get_candles(
+    coin: str,
+    currency: str = Query("usd", description="usd or inr"),
+    interval: str = Query("1h", description="1h (last 90 days) or 1d (all history)"),
+    days: int = Query(7, ge=1, le=3650),
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    Open/high/low/close candles of the OFFICIAL price, for listed coins.
+    Built from one reading per minute, so they are accurate to the minute.
+    """
+    require_key(x_api_key)
+    cur = currency.strip().upper()
+    if cur not in ("USD", "INR"):
+        raise HTTPException(status_code=400, detail="currency must be usd or inr")
+    if interval not in ("1h", "1d"):
+        raise HTTPException(status_code=400, detail="interval must be 1h or 1d")
+    if interval == "1h" and days > 90:
+        raise HTTPException(status_code=400, detail="1h candles go back 90 days - use 1d")
+
+    with engine.connect() as conn:
+        slug, symbol = resolve_coin(conn, coin)
+        params = {"b": symbol, "c": cur, "days": days}
+        if interval == "1h":
+            rows = conn.execute(text("""
+                SELECT hour AS t, open, high, low, close, samples
+                FROM index_candles_1h
+                WHERE base = :b AND currency = :c
+                  AND hour >= NOW() - make_interval(days => :days)
+                ORDER BY hour
+            """), params).fetchall()
+        else:
+            rows = conn.execute(text("""
+                SELECT day AS t, open, high, low, close, samples
+                FROM index_candles_1d
+                WHERE base = :b AND currency = :c
+                  AND day >= (NOW() - make_interval(days => :days))::date
+                UNION ALL
+                SELECT (hour AT TIME ZONE 'UTC')::date,
+                       (ARRAY_AGG(open ORDER BY hour ASC))[1], MAX(high), MIN(low),
+                       (ARRAY_AGG(close ORDER BY hour DESC))[1], SUM(samples)
+                FROM index_candles_1h
+                WHERE base = :b AND currency = :c
+                  AND hour >= (NOW() - make_interval(days => :days))::date
+                GROUP BY (hour AT TIME ZONE 'UTC')::date
+                ORDER BY 1
+            """), params).fetchall()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No candles for '{coin}' in {cur}. Candles exist for listed coins, "
+                   f"starting from when official prices were switched on.",
+        )
+    return {
+        "symbol": symbol,
+        "coin_id": slug,
+        "currency": cur,
+        "interval": interval,
+        "count": len(rows),
+        "candles": [
+            {"t": r[0].isoformat(), "open": float(r[1]), "high": float(r[2]),
+             "low": float(r[3]), "close": float(r[4]), "samples": int(r[5])}
+            for r in rows
+        ],
+    }
+
+
+@app.get("/v1/exchanges/{slug}")
+def exchange_detail(slug: str, x_api_key: Optional[str] = Header(None)):
+    """One exchange: rating, daily stats for the last 7 days, and current status."""
+    require_key(x_api_key)
+    with engine.connect() as conn:
+        ex = conn.execute(text(
+            "SELECT id, slug, name, country, is_active FROM exchanges WHERE slug = LOWER(:s)"
+        ), {"s": slug.strip()}).mappings().first()
+        if not ex:
+            raise HTTPException(status_code=404, detail=f"Unknown exchange '{slug}'")
+        days = conn.execute(text("""
+            SELECT day, rounds_ok, rounds_failed, pairs_sum, wide_sum, thin_sum,
+                   midpoint_sum, outlier_sum, dev_sum, dev_n
+            FROM exchange_daily_stats
+            WHERE exchange_id = :id AND day >= CURRENT_DATE - 6
+            ORDER BY day
+        """), {"id": ex["id"]}).fetchall()
+        quality = quality_by_exchange(conn).get(ex["slug"])
+        pairs = conn.execute(text(
+            "SELECT count(*) FROM prices_latest WHERE exchange_id = :id"
+        ), {"id": ex["id"]}).scalar()
+
+    return {
+        "slug": ex["slug"],
+        "name": ex["name"],
+        "country": ex["country"],
+        "is_active": ex["is_active"],
+        "pairs_tracked": pairs,
+        "quality": quality,
+        "daily": [
+            {"day": d[0].isoformat(), "rounds_ok": d[1], "rounds_failed": d[2],
+             "avg_pairs": round(d[3] / d[1]) if d[1] else 0,
+             "wide_spread_pct": round(d[4] / d[3] * 100, 2) if d[3] else None,
+             "thin_volume_pct": round(d[5] / d[3] * 100, 2) if d[3] else None,
+             "estimated_price_pct": round(d[6] / d[3] * 100, 2) if d[3] else None,
+             "outliers": d[7],
+             "avg_deviation_pct": round(d[8] / d[9], 4) if d[9] else None}
+            for d in days
+        ],
+    }

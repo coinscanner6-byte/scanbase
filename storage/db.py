@@ -75,6 +75,7 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
             row.get("bid"), row.get("ask"),
             row.get("high_24h"), row.get("low_24h"), row.get("volume_24h"),
             collected_at, row.get("price_source", "last_trade"),
+            row.get("exchange_time"),
         )
         for row in prices
     ]
@@ -95,7 +96,7 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
                 cur,
                 """
                 INSERT INTO prices_latest
-                    (exchange_id, symbol, symbol_std, price, bid, ask, high_24h, low_24h, volume_24h, collected_at, price_source)
+                    (exchange_id, symbol, symbol_std, price, bid, ask, high_24h, low_24h, volume_24h, collected_at, price_source, exchange_time)
                 VALUES %s
                 ON CONFLICT (exchange_id, symbol)
                 DO UPDATE SET
@@ -107,7 +108,8 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
                     low_24h = EXCLUDED.low_24h,
                     volume_24h = EXCLUDED.volume_24h,
                     collected_at = EXCLUDED.collected_at,
-                    price_source = EXCLUDED.price_source
+                    price_source = EXCLUDED.price_source,
+                    exchange_time = EXCLUDED.exchange_time
                 """,
                 latest_values,
                 page_size=1000,
@@ -166,3 +168,33 @@ def record_failure(exchange_id, error_message, at):
             """),
             {"id": exchange_id, "error": error_message[:500], "at": at},
         )
+
+
+def record_warning(exchange_id, message, at):
+    """A non-fatal problem, e.g. far fewer pairs than usual (API may have changed)."""
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO exchange_status (exchange_id, last_warning_at, last_warning, updated_at)
+                VALUES (:id, :at, :msg, :at)
+                ON CONFLICT (exchange_id) DO UPDATE SET
+                    last_warning_at = EXCLUDED.last_warning_at,
+                    last_warning = EXCLUDED.last_warning,
+                    updated_at = EXCLUDED.updated_at
+            """),
+            {"id": exchange_id, "msg": message[:500], "at": at},
+        )
+
+
+def load_countries():
+    """{exchange slug: country} for every exchange."""
+    with engine.connect() as conn:
+        return dict(conn.execute(text("SELECT slug, COALESCE(country, 'GLOBAL') FROM exchanges")).fetchall())
+
+
+def load_listed_symbols():
+    """Symbols of listed coins - the ones that get official-price candles."""
+    with engine.connect() as conn:
+        return set(conn.execute(text(
+            "SELECT DISTINCT UPPER(symbol) FROM coins WHERE is_active = TRUE"
+        )).scalars().all())

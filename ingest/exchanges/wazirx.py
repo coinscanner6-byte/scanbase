@@ -21,6 +21,7 @@ class WazirX(Exchange):
         "high_24h": "highPrice",
         "low_24h": "lowPrice",
         "volume_24h": "volume",
+        "exchange_time": "at",
     }
 
     def adjust(self, row, item):

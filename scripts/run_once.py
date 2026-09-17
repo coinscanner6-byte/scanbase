@@ -26,7 +26,11 @@ def main():
         exchanges = {slug: exchanges[slug] for slug in wanted}
 
     print(f"Running once for: {', '.join(exchanges)}")
-    results = run_round(exchanges)
+    collected = {}
+    results = run_round(exchanges, collect=collected)
+    if collected and not wanted:
+        from ingest.worker import update_official_prices
+        update_official_prices(collected, results, {}, print)
     failed = [s for s, r in results.items() if r != "ok"]
     print(f"\nDone. {len(results) - len(failed)} ok, {len(failed)} failed.")
 

@@ -27,6 +27,7 @@ class CoinDCX(Exchange):
         "high_24h": "high",
         "low_24h": "low",
         "volume_24h": "volume",
+        "exchange_time": "timestamp",
     }
 
     def adjust(self, row, item):

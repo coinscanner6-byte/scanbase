@@ -111,3 +111,10 @@ def test_zebpay_zeros_become_empty():
 def test_kucoin_bid_ask():
     row = parsed("kucoin")[0]
     assert (row["bid"], row["ask"], row["volume_24h"]) == ("76149.25", "76368.47", "12.5")
+
+
+def test_exchange_times_read():
+    assert clean_prices(parsed("coindcx"))[0]["exchange_time"] is not None
+    assert clean_prices(parsed("wazirx"))[0]["exchange_time"] is not None
+    assert clean_prices(parsed("zebpay"))[0]["exchange_time"] is not None
+    assert clean_prices(parsed("giottus"))[0]["exchange_time"] is None

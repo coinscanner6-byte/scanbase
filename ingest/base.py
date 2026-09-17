@@ -25,7 +25,8 @@ from shared.config import DEFAULT_TIMEOUT_SECONDS
 from ingest.symbols import standardise
 
 # Our standard names. Every exchange gets translated into exactly these.
-STANDARD_FIELDS = ("symbol", "price", "bid", "ask", "high_24h", "low_24h", "volume_24h")
+STANDARD_FIELDS = ("symbol", "price", "bid", "ask", "high_24h", "low_24h", "volume_24h",
+                   "exchange_time")
 
 
 class Exchange:

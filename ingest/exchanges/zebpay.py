@@ -21,6 +21,7 @@ class ZebPay(Exchange):
         "high_24h": "high",
         "low_24h": "low",
         "volume_24h": "baseVolume",
+        "exchange_time": "timestamp",
     }
 
     def extract(self, data):

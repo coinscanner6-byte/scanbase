@@ -53,10 +53,14 @@ Interactive docs: `https://scanbase-api.up.railway.app/docs`
 | Endpoint | Key? | What it returns |
 |---|---|---|
 | `GET /v1/health` | No | API and database are up |
-| `GET /v1/exchanges` | Yes | Exchanges we collect from |
+| `GET /v1/prices?currency=usd\|inr&symbols=&listed_only=` | Yes | **Official Scanbase prices** (paged) |
+| `GET /v1/prices/{coin}` | Yes | Official USD + INR price and India premium for one coin |
+| `GET /v1/candles/{coin}?currency=&interval=1h\|1d&days=` | Yes | Candles of the official price (listed coins) |
+| `GET /v1/exchanges/{slug}` | Yes | One exchange: quality rating and daily stats |
+| `GET /v1/exchanges` | Yes | Exchanges we collect from, with quality rating |
 | `GET /v1/status` | Yes | Whether each exchange is working, last error |
-| `GET /v1/ticker/{symbol}` | Yes | Price of one pair on every exchange, with age and `is_stale` |
-| `GET /v1/markets?exchange=` | Yes | Every tracked pair |
+| `GET /v1/ticker/{symbol}` | Yes | One pair on every exchange, with quality flags, exchange time, and the official price |
+| `GET /v1/markets?exchange=&limit=&offset=` | Yes | Every tracked pair (paged) |
 | `GET /v1/coins?search=&limit=&offset=` | Yes | Coin list with logo links |
 | `GET /v1/coins/{slug or symbol}` | Yes | Full coin info + live USDT price and market cap |
 | `GET /v1/logos/{symbol}` | No | Logo image (generated circle if none) — usable in `<img>` |
@@ -148,3 +152,37 @@ Order of preference: Trust Wallet (MIT) → cryptocurrency-icons (CC0) →
 CoinScanner copy → generated circle. `scripts/fetch_logos.py` runs on a
 laptop, so fetching costs nothing on the server. Logos are served with a
 7-day browser cache. Licences: see `THIRD_PARTY_NOTICES.md`.
+
+## Official prices (how they are calculated)
+
+Every collection round, the worker turns exchange prices into one
+official price per coin:
+
+1. **Two separate prices.** USD uses only global exchanges' USDT/USDC
+   pairs. INR uses only Indian exchanges' INR pairs. Indian exchanges
+   never move the USD price.
+2. **Flags** on every exchange price: `wide_spread` (gap > 2%),
+   `thin_volume` (< $1,000 traded in 24h), `no_volume`,
+   `estimated_price` (midpoint, not a trade), `outlier`.
+3. **Wide-gap prices are dropped** when at least two clean ones remain.
+4. **Outliers are dropped**: with 3+ prices, a modified z-score on the
+   median absolute deviation (cut-off 3.5); with fewer, anything more
+   than 50% away from the previous official price.
+5. **Volume-weighted average** of what is left. Prices without volume
+   get the smallest known weight.
+6. **Confidence**: high (3+ exchanges), medium (2), low (1).
+
+Candles of the official price are built from these per-minute values
+for listed coins: hourly for 90 days, then daily.
+
+## Exchange quality rating (last 7 days)
+
+Uptime 30%, accuracy vs official price 35% (outliers penalised),
+tight buy/sell gaps 20%, real trades vs estimates 15%. Grades A/B/C/D.
+More than 20% outlier prices, or an average gap over 5%, is always D.
+Shown after 30+ rounds.
+
+## Breakage detection
+
+An exchange returning zero valid prices is recorded as a failure. One
+returning less than half its usual pairs gets a warning in `/v1/status`.
