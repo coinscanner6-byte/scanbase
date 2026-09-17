@@ -15,7 +15,7 @@ import secrets
 from datetime import datetime, timezone
 
 from sqlalchemy import text
-from core.db import engine
+from storage.db import engine
 
 
 def generate_key():

@@ -27,8 +27,10 @@ CREATE TABLE IF NOT EXISTS prices_latest (
     PRIMARY KEY (exchange_id, symbol)
 );
 
--- One row per coin, per exchange, per hour. This is our permanent
--- history. It grows slowly and on purpose - about 10MB a year.
+-- One row per coin, per exchange, per hour. This is our history.
+-- Only useful pairs are saved here (see ingest/history_filter.py),
+-- and rows older than 90 days are squeezed into prices_daily
+-- (see storage/retention.py) so this table stays a fixed size.
 CREATE TABLE IF NOT EXISTS prices_hourly (
     id           BIGSERIAL PRIMARY KEY,
     exchange_id  INTEGER NOT NULL REFERENCES exchanges(id),

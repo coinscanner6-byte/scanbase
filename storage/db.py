@@ -4,14 +4,10 @@ project should open a database connection directly - everything
 goes through here, so there's only one place to fix if it changes.
 """
 
-import os
 from sqlalchemy import create_engine, text
 from psycopg2.extras import execute_values
-from dotenv import load_dotenv
 
-load_dotenv()  # reads the .env file and makes DATABASE_URL available
-
-DATABASE_URL = os.getenv("DATABASE_URL")
+from shared.config import DATABASE_URL
 
 if not DATABASE_URL:
     raise RuntimeError(
@@ -19,7 +15,9 @@ if not DATABASE_URL:
         "your real database address."
     )
 
-engine = create_engine(DATABASE_URL)
+# pool_pre_ping quietly checks a connection is still alive before using
+# it, so a database restart on Railway doesn't cause random errors.
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 def get_exchange_id(slug):
@@ -36,12 +34,12 @@ def get_exchange_id(slug):
         if result is None:
             raise ValueError(
                 f"No exchange found with slug '{slug}'. "
-                f"Did you run db/schema.sql against this database?"
+                f"Did you run storage/migrations/001_schema.sql against this database?"
             )
         return result[0]
 
 
-def save_prices(exchange_id, prices, collected_at):
+def save_prices(exchange_id, prices, collected_at, history_rows=None):
     """
     Save a batch of prices for one exchange, in a single real trip to
     the database rather than one trip per row.
@@ -54,9 +52,16 @@ def save_prices(exchange_id, prices, collected_at):
     from us. execute_values (from psycopg2) builds one real statement
     covering every row and sends it once, which is what actually makes
     this fast over a slow connection.
+
+    'history_rows' is the subset worth keeping in permanent hourly
+    history (see ingest/history_filter.py). If not given, every row
+    goes into history, as before.
     """
     if not prices:
         return 0
+
+    if history_rows is None:
+        history_rows = prices
 
     hour_bucket = collected_at.replace(minute=0, second=0, microsecond=0)
 
@@ -76,7 +81,7 @@ def save_prices(exchange_id, prices, collected_at):
             row.get("high_24h"), row.get("low_24h"), row.get("volume_24h"),
             hour_bucket,
         )
-        for row in prices
+        for row in history_rows
     ]
 
     raw_conn = engine.raw_connection()
@@ -101,18 +106,51 @@ def save_prices(exchange_id, prices, collected_at):
                 """,
                 latest_values,
             )
-            execute_values(
-                cur,
-                """
-                INSERT INTO prices_hourly
-                    (exchange_id, symbol, symbol_std, price, bid, ask, high_24h, low_24h, volume_24h, hour_bucket)
-                VALUES %s
-                ON CONFLICT (exchange_id, symbol, hour_bucket) DO NOTHING
-                """,
-                hourly_values,
-            )
+            if hourly_values:
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO prices_hourly
+                        (exchange_id, symbol, symbol_std, price, bid, ask, high_24h, low_24h, volume_24h, hour_bucket)
+                    VALUES %s
+                    ON CONFLICT (exchange_id, symbol, hour_bucket) DO NOTHING
+                    """,
+                    hourly_values,
+                )
         raw_conn.commit()
     finally:
         raw_conn.close()
 
     return len(prices)
+
+
+def record_success(exchange_id, saved_count, at):
+    """Notes that this exchange worked this round."""
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO exchange_status (exchange_id, last_success_at, last_saved_count, updated_at)
+                VALUES (:id, :at, :count, :at)
+                ON CONFLICT (exchange_id) DO UPDATE SET
+                    last_success_at = EXCLUDED.last_success_at,
+                    last_saved_count = EXCLUDED.last_saved_count,
+                    updated_at = EXCLUDED.updated_at
+            """),
+            {"id": exchange_id, "count": saved_count, "at": at},
+        )
+
+
+def record_failure(exchange_id, error_message, at):
+    """Notes that this exchange failed this round, and why."""
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO exchange_status (exchange_id, last_error_at, last_error, updated_at)
+                VALUES (:id, :at, :error, :at)
+                ON CONFLICT (exchange_id) DO UPDATE SET
+                    last_error_at = EXCLUDED.last_error_at,
+                    last_error = EXCLUDED.last_error,
+                    updated_at = EXCLUDED.updated_at
+            """),
+            {"id": exchange_id, "error": error_message[:500], "at": at},
+        )

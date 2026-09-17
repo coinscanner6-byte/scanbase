@@ -12,3 +12,6 @@ venv/
 
 # Editor junk
 .vscode/
+
+# Test junk
+.pytest_cache/
