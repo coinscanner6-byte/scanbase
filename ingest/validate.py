@@ -49,6 +49,27 @@ def to_number_or_none(value):
         return None
 
 
+
+
+def pick_price(last, bid, ask, source):
+    """
+    Returns (price, price_source).
+
+    If the exchange's last trade price sits outside its own current
+    buy/sell offers, nobody has traded for a while and that price is
+    out of date - so we use the midpoint of the offers instead.
+    """
+    if source == "midpoint":
+        return last, "midpoint"
+    # Any last price outside the offers counts - even by Rs 1. On busy
+    # exchanges the midpoint is almost identical to the last price
+    # anyway, so nothing is lost; on quiet ones it removes stale prices.
+    if bid and ask and 0 < bid <= ask:
+        if not (bid <= last <= ask):
+            return (bid + ask) / 2, "midpoint"
+    return last, "last_trade"
+
+
 def clean_prices(raw_prices):
     """
     Takes a list of price dicts and returns only the ones that pass
@@ -70,12 +91,19 @@ def clean_prices(raw_prices):
         if not is_valid_price(symbol, price):
             continue
 
+        bid = to_number_or_none(item.get("bid"))
+        ask = to_number_or_none(item.get("ask"))
+        final_price, price_source = pick_price(
+            float(price), bid, ask, item.get("price_source")
+        )
+
         good.append({
             "symbol": symbol,
             "symbol_std": standardise(symbol),
-            "price": float(price),
-            "bid": to_number_or_none(item.get("bid")),
-            "ask": to_number_or_none(item.get("ask")),
+            "price": final_price,
+            "price_source": price_source,
+            "bid": bid,
+            "ask": ask,
             "high_24h": to_number_or_none(item.get("high_24h")),
             "low_24h": to_number_or_none(item.get("low_24h")),
             "volume_24h": to_number_or_none(item.get("volume_24h")),

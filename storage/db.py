@@ -74,7 +74,7 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
             exchange_id, row["symbol"], row.get("symbol_std"), row["price"],
             row.get("bid"), row.get("ask"),
             row.get("high_24h"), row.get("low_24h"), row.get("volume_24h"),
-            collected_at,
+            collected_at, row.get("price_source", "last_trade"),
         )
         for row in prices
     ]
@@ -95,7 +95,7 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
                 cur,
                 """
                 INSERT INTO prices_latest
-                    (exchange_id, symbol, symbol_std, price, bid, ask, high_24h, low_24h, volume_24h, collected_at)
+                    (exchange_id, symbol, symbol_std, price, bid, ask, high_24h, low_24h, volume_24h, collected_at, price_source)
                 VALUES %s
                 ON CONFLICT (exchange_id, symbol)
                 DO UPDATE SET
@@ -106,7 +106,8 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
                     high_24h = EXCLUDED.high_24h,
                     low_24h = EXCLUDED.low_24h,
                     volume_24h = EXCLUDED.volume_24h,
-                    collected_at = EXCLUDED.collected_at
+                    collected_at = EXCLUDED.collected_at,
+                    price_source = EXCLUDED.price_source
                 """,
                 latest_values,
                 page_size=1000,

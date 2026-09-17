@@ -90,13 +90,16 @@ def test_coindcx_inr_only_and_volume_in_coins():
 def test_wazirx_symbol_from_assets():
     rows = clean_prices(parsed("wazirx"))
     assert rows[0]["symbol"] == "BTC-INR" and rows[0]["symbol_std"] == "BTC-INR"
+    # the real sample's last price is below its own bid -> stale -> midpoint
+    assert rows[0]["price_source"] == "midpoint"
 
 
 def test_giottus_midpoint_and_wide_spread_skipped():
     rows = parsed("giottus")
     assert [r["symbol"] for r in rows] == ["BTC/INR"]     # WBTC (8% gap) and DEAD skipped
     assert rows[0]["price"] == 7510000
-    assert clean_prices(rows)[0]["symbol_std"] == "BTC-INR"
+    cleaned = clean_prices(rows)[0]
+    assert cleaned["symbol_std"] == "BTC-INR" and cleaned["price_source"] == "midpoint"
 
 
 def test_zebpay_zeros_become_empty():
