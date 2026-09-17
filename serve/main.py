@@ -14,10 +14,10 @@ Interactive docs (auto-generated):
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Query
 from sqlalchemy import text
 
-from shared.config import STALE_AFTER_SECONDS
+from shared.config import STALE_AFTER_SECONDS, HOURLY_KEEP_DAYS
 from storage.db import engine
 from ingest.symbols import standardise
 from serve.auth import check_key
@@ -28,7 +28,7 @@ app = FastAPI(
         "Live crypto prices collected from multiple exchanges, in one "
         "standard format. Send your key in the `X-API-Key` header."
     ),
-    version="0.2.0",
+    version="0.3.0",
 )
 
 
@@ -203,4 +203,102 @@ def list_markets(exchange: Optional[str] = None, x_api_key: Optional[str] = Head
     return {
         "count": len(rows),
         "markets": [{"symbol": r[1], "exchange_symbol": r[0], "exchange": r[2]} for r in rows],
+    }
+
+
+@app.get("/v1/history/{symbol}")
+def get_history(
+    symbol: str,
+    interval: str = Query("hour", pattern="^(hour|day)$",
+                          description="hour = one price per hour (last 90 days); "
+                                      "day = open/high/low/close per day (all history)"),
+    days: int = Query(7, ge=1, le=3650, description="How far back to go"),
+    exchange: Optional[str] = Query(None, description="One exchange only, e.g. binance"),
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    Past prices for one pair - what CoinScanner needs for charts.
+
+    Only pairs kept in history are available (USDT/USDC with real
+    trading, and all INR pairs). Any spelling works: BTCUSDT, BTC-USDT.
+    """
+    require_key(x_api_key)
+    wanted = standardise(symbol)
+
+    if interval == "hour" and days > HOURLY_KEEP_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Hourly history only goes back {HOURLY_KEEP_DAYS} days. "
+                   f"Use interval=day for longer periods.",
+        )
+
+    params = {"wanted": wanted, "days": days, "exchange": exchange}
+    exchange_filter = "AND e.slug = :exchange" if exchange else ""
+
+    if interval == "hour":
+        sql = f"""
+            SELECT e.slug, h.hour_bucket AS t, h.price, h.volume_24h
+            FROM prices_hourly h
+            JOIN exchanges e ON e.id = h.exchange_id
+            WHERE h.symbol_std = :wanted
+              AND h.hour_bucket >= NOW() - make_interval(days => :days)
+              {exchange_filter}
+            ORDER BY e.slug, t
+        """
+    else:
+        # Older days live in prices_daily; recent days are still hourly
+        # rows, so we summarise those on the fly. The clean-up job
+        # deletes hourly rows once summarised, so a day never appears twice.
+        sql = f"""
+            WITH combined AS (
+                SELECT d.exchange_id, d.day, d.open, d.high, d.low, d.close
+                FROM prices_daily d
+                WHERE d.symbol_std = :wanted
+                  AND d.day >= (NOW() - make_interval(days => :days))::date
+                UNION ALL
+                SELECT h.exchange_id,
+                       (h.hour_bucket AT TIME ZONE 'UTC')::date,
+                       (ARRAY_AGG(h.price ORDER BY h.hour_bucket ASC))[1],
+                       MAX(h.price),
+                       MIN(h.price),
+                       (ARRAY_AGG(h.price ORDER BY h.hour_bucket DESC))[1]
+                FROM prices_hourly h
+                WHERE h.symbol_std = :wanted
+                  AND h.hour_bucket >= (NOW() - make_interval(days => :days))::date
+                GROUP BY h.exchange_id, h.symbol, (h.hour_bucket AT TIME ZONE 'UTC')::date
+            )
+            SELECT e.slug, c.day AS t, c.open, c.high, c.low, c.close
+            FROM combined c
+            JOIN exchanges e ON e.id = c.exchange_id
+            WHERE TRUE {exchange_filter}
+            ORDER BY e.slug, t
+        """
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(sql), params).fetchall()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No history for '{symbol}'. It may be a pair we don't keep "
+                   f"in history, or collection started too recently.",
+        )
+
+    by_exchange = {}
+    for r in rows:
+        if interval == "hour":
+            point = {"t": r[1].isoformat(), "price": num(r[2]), "volume_24h": num(r[3])}
+        else:
+            point = {"t": r[1].isoformat(), "open": num(r[2]), "high": num(r[3]),
+                     "low": num(r[4]), "close": num(r[5])}
+        by_exchange.setdefault(r[0], []).append(point)
+
+    return {
+        "symbol": wanted,
+        "interval": interval,
+        "days": days,
+        "exchanges": [
+            {"exchange": slug, "points": len(pts), "data": pts}
+            for slug, pts in by_exchange.items()
+        ],
     }
