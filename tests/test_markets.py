@@ -87,3 +87,10 @@ def test_best_uses_ask_to_buy_and_bid_to_sell():
     assert [s["exchange"] for s in r["sell"]] == ["zebpay", "coindcx", "giottus"]
     assert r["summary"]["best_buy"] == "giottus"
     assert r["summary"]["buy_price_spread_pct"] == round((103 / 98 - 1) * 100, 3)
+
+
+def test_median_has_no_float_noise():
+    rows = [row("a", "IN", "BTC-INR", 7602883.1), row("b", "IN", "BTC-INR", 7602883.645),
+            row("c", "IN", "USDT-INR", 99.51), row("d", "GLOBAL", "BTC-USDT", 76000)]
+    p = compute_premium("BTC", rows)
+    assert p["india"]["price_inr"] == 7602883.3725

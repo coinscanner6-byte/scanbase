@@ -18,8 +18,9 @@ def split_pair(symbol_std):
 
 
 def _mid(values):
+    """Middle value, rounded to 8 decimals so float noise doesn't show."""
     values = [v for v in values if v]
-    return median(values) if values else None
+    return round(median(values), 8) if values else None
 
 
 def compute_premium(base, rows):

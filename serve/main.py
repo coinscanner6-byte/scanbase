@@ -34,7 +34,7 @@ app = FastAPI(
         "Live crypto prices collected from multiple exchanges, in one "
         "standard format. Send your key in the `X-API-Key` header."
     ),
-    version="0.6.0",
+    version="0.6.1",
 )
 
 
@@ -521,8 +521,7 @@ def get_premium(base: str, x_api_key: Optional[str] = Header(None)):
 @app.get("/v1/best/{symbol}")
 def best_price(
     symbol: str,
-    country: Optional[str] = Query(None, pattern="^(IN|GLOBAL)$",
-                                   description="Only Indian (IN) or only global exchanges"),
+    country: Optional[str] = Query(None, description="IN = Indian exchanges only, GLOBAL = global only"),
     x_api_key: Optional[str] = Header(None),
 ):
     """
@@ -534,6 +533,9 @@ def best_price(
     where = "AND p.symbol_std = :wanted"
     params = {"wanted": wanted}
     if country:
+        country = country.strip().upper()
+        if country not in ("IN", "GLOBAL"):
+            raise HTTPException(status_code=400, detail="country must be IN or GLOBAL")
         where += " AND e.country = :country"
         params["country"] = country
     with engine.connect() as conn:
