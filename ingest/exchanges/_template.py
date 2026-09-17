@@ -26,5 +26,11 @@ class NewExchange(Exchange):
         # "low_24h": "...", "volume_24h": "...",
     }
 
+    # ONLY_QUOTES = ("INR",)     # keep only INR pairs
+
     # def extract(self, data):
     #     return data["result"]["list"]
+
+    # def adjust(self, row, item):
+    #     # fix values here; return None to skip the pair
+    #     return row

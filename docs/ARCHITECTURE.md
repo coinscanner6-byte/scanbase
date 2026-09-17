@@ -56,12 +56,18 @@ flowchart LR
 
 ## Current exchanges
 
-Binance (via data-api.binance.vision), OKX, Bybit, MEXC, Gate.io.
-Kraken was dropped: unreachable from our network during testing.
+Global: Binance (via data-api.binance.vision), OKX, Bybit, MEXC, Gate.io, KuCoin.
+India (INR): CoinDCX (INR pairs only - its USDT pairs mirror Binance),
+WazirX, Giottus (midpoint of bid/ask; pairs with >5% gap skipped), ZebPay.
+
+Rejected: Kraken (unreachable), Bitbns (stale/wrong prices - BTC shown at
+49,999 USDT when the market was ~76,000), Delta (only 6 spot pairs,
+unreliable mark price).
+
+The worker runs in Railway's Singapore region: Bybit blocks US servers.
 
 ## Known limits / next steps
 
-- MEXC 24hr endpoint fields are assumed to match Binance — confirm on live data
 - Symbol splitting relies on a known list of quote currencies
 - No price cross-checking between exchanges yet (outlier detection)
 - Rate limiting is per hour only (no per-second burst limit)

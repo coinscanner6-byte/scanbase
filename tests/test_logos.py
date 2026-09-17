@@ -26,6 +26,6 @@ def test_logo_url_uppercase():
 
 
 def test_coin_output_cleaning():
-    from serve.main import public_description, clean_links
+    from serve.coin_format import public_description, clean_links
     assert public_description({"summary": "a", "sections": [], "draft_source": "x"}) == {"summary": "a", "sections": []}
     assert clean_links({"telegram": "", "web": ["x", ""], "gh": []}) == {"web": ["x"]}

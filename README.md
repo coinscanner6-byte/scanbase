@@ -14,7 +14,9 @@ scanbase/
 │   ├── base.py             the template every exchange follows
 │   ├── registry.py         finds every exchange file automatically
 │   ├── exchanges/          one small file per exchange
-│   │   ├── binance.py  okx.py  bybit.py  mexc.py  gateio.py
+│   │   ├── global: binance okx bybit mexc gateio kucoin
+│   │   ├── India:  coindcx wazirx giottus zebpay
+│   │   ├── _helpers.py     shared number clean-up
 │   │   └── _template.py    copy this to add a new exchange
 │   ├── symbols.py          BTCUSDT / BTC_USDT / BTC-USDT → BTC-USDT
 │   ├── validate.py         throws away broken prices

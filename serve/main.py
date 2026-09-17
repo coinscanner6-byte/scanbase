@@ -25,6 +25,7 @@ from storage.db import engine
 from ingest.symbols import standardise
 from serve.auth import check_key
 from serve.logos import logo_url, placeholder_svg
+from serve.coin_format import public_description, clean_links
 
 app = FastAPI(
     title="CoinScanner API",
@@ -32,7 +33,7 @@ app = FastAPI(
         "Live crypto prices collected from multiple exchanges, in one "
         "standard format. Send your key in the `X-API-Key` header."
     ),
-    version="0.4.1",
+    version="0.5.0",
 )
 
 
@@ -84,9 +85,9 @@ def list_exchanges(x_api_key: Optional[str] = Header(None)):
     require_key(x_api_key)
     with engine.connect() as conn:
         rows = conn.execute(
-            text("SELECT slug, name, is_active FROM exchanges ORDER BY slug")
+            text("SELECT slug, name, is_active, country FROM exchanges ORDER BY slug")
         ).fetchall()
-    return [{"slug": r[0], "name": r[1], "is_active": r[2]} for r in rows]
+    return [{"slug": r[0], "name": r[1], "is_active": r[2], "country": r[3]} for r in rows]
 
 
 @app.get("/v1/status")
@@ -317,26 +318,6 @@ def num_or_none(value):
 
 def day(value):
     return value.isoformat() if value else None
-
-
-def public_description(desc):
-    """Hides internal fields (e.g. draft_source) - only summary and sections go out."""
-    if not isinstance(desc, dict):
-        return desc
-    return {k: v for k, v in desc.items() if k in ("summary", "sections")}
-
-
-def clean_links(links):
-    """Drops empty links like "telegram": "" and empty entries inside lists."""
-    if not isinstance(links, dict):
-        return links
-    out = {}
-    for key, value in links.items():
-        if isinstance(value, list):
-            value = [v for v in value if v]
-        if value:
-            out[key] = value
-    return out
 
 
 @app.get("/v1/coins")
