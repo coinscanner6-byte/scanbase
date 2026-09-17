@@ -14,13 +14,17 @@ Interactive docs (auto-generated):
 from datetime import datetime, timezone
 from typing import Optional
 
+from statistics import median
+
 from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi.responses import Response
 from sqlalchemy import text
 
 from shared.config import STALE_AFTER_SECONDS, HOURLY_KEEP_DAYS
 from storage.db import engine
 from ingest.symbols import standardise
 from serve.auth import check_key
+from serve.logos import logo_url, placeholder_svg
 
 app = FastAPI(
     title="CoinScanner API",
@@ -28,7 +32,7 @@ app = FastAPI(
         "Live crypto prices collected from multiple exchanges, in one "
         "standard format. Send your key in the `X-API-Key` header."
     ),
-    version="0.3.0",
+    version="0.4.0",
 )
 
 
@@ -302,3 +306,148 @@ def get_history(
             for slug, pts in by_exchange.items()
         ],
     }
+
+
+
+# ---------- coins and logos ----------
+
+def num_or_none(value):
+    return float(value) if value is not None else None
+
+
+def day(value):
+    return value.isoformat() if value else None
+
+
+@app.get("/v1/coins")
+def list_coins(
+    search: Optional[str] = Query(None, description="Match name, symbol or slug"),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    x_api_key: Optional[str] = Header(None),
+):
+    """All coins, best-ranked first. Short info only - use /v1/coins/{coin} for details."""
+    require_key(x_api_key)
+
+    where = "WHERE is_active = TRUE"
+    params = {"limit": limit, "offset": offset}
+    if search:
+        where += " AND (name ILIKE :q OR symbol ILIKE :q OR slug ILIKE :q)"
+        params["q"] = f"%{search.strip()}%"
+
+    with engine.connect() as conn:
+        total = conn.execute(text(f"SELECT count(*) FROM coins {where}"), params).scalar()
+        rows = conn.execute(text(f"""
+            SELECT slug, symbol, name, rank, categories
+            FROM coins {where}
+            ORDER BY rank NULLS LAST, name
+            LIMIT :limit OFFSET :offset
+        """), params).fetchall()
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "coins": [
+            {"slug": r[0], "symbol": r[1], "name": r[2], "rank": r[3],
+             "categories": r[4] or [], "logo_url": logo_url(r[1])}
+            for r in rows
+        ],
+    }
+
+
+@app.get("/v1/coins/{coin}")
+def get_coin(coin: str, x_api_key: Optional[str] = Header(None)):
+    """
+    Full info for one coin, plus its live USDT price.
+    Accepts the slug ("dogecoin") or the symbol ("DOGE"). If several coins
+    share a symbol, the best-ranked one is returned.
+    """
+    require_key(x_api_key)
+
+    with engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT slug, symbol, name, rank, description, links, categories,
+                   contract_addresses, genesis_date, max_supply, total_supply,
+                   circulating_supply, ath_usd, ath_date, atl_usd, atl_date,
+                   source_updated_at
+            FROM coins
+            WHERE slug = LOWER(:c) OR UPPER(symbol) = UPPER(:c)
+            ORDER BY (slug = LOWER(:c)) DESC, rank NULLS LAST
+            LIMIT 1
+        """), {"c": coin.strip()}).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail=f"No coin found for '{coin}'")
+
+        prices = conn.execute(text("""
+            SELECT e.slug, p.price, p.collected_at
+            FROM prices_latest p
+            JOIN exchanges e ON e.id = p.exchange_id
+            WHERE p.symbol_std = :pair
+              AND p.collected_at >= NOW() - make_interval(secs => :stale)
+        """), {"pair": f"{row['symbol']}-USDT", "stale": STALE_AFTER_SECONDS}).fetchall()
+
+    live = [float(p[1]) for p in prices]
+    price_usdt = median(live) if live else None
+    circulating = num_or_none(row["circulating_supply"])
+
+    return {
+        "slug": row["slug"],
+        "symbol": row["symbol"],
+        "name": row["name"],
+        "rank": row["rank"],
+        "logo_url": logo_url(row["symbol"]),
+        "categories": row["categories"] or [],
+        "description": row["description"],
+        "links": row["links"],
+        "contract_addresses": row["contract_addresses"] or {},
+        "genesis_date": day(row["genesis_date"]),
+        "supply": {
+            "circulating": circulating,
+            "total": num_or_none(row["total_supply"]),
+            "max": num_or_none(row["max_supply"]),
+        },
+        "all_time": {
+            "high_usd": num_or_none(row["ath_usd"]),
+            "high_date": day(row["ath_date"]),
+            "low_usd": num_or_none(row["atl_usd"]),
+            "low_date": day(row["atl_date"]),
+        },
+        "live": {
+            "price_usdt": price_usdt,
+            "market_cap_usdt": price_usdt * circulating if price_usdt and circulating else None,
+            "exchange_count": len(live),
+            "exchanges": sorted(p[0] for p in prices),
+        },
+        "info_updated_at": row["source_updated_at"].isoformat() if row["source_updated_at"] else None,
+    }
+
+
+@app.get("/v1/logos/{symbol}")
+def get_logo(symbol: str):
+    """
+    A coin's logo image. Open - no key - so it works directly in
+    <img src="..."> tags. Unknown symbols get a generated circle.
+    """
+    wanted = symbol.strip().upper()
+    for ext in (".PNG", ".SVG", ".JPG", ".JPEG", ".WEBP"):
+        if wanted.endswith(ext):
+            wanted = wanted[: -len(ext)]
+            break
+
+    if not wanted.isalnum() or len(wanted) > 20:
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT content_type, data FROM coin_logos WHERE symbol = :s"),
+            {"s": wanted},
+        ).fetchone()
+
+    if row:
+        return Response(content=bytes(row[1]), media_type=row[0],
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+    return Response(content=placeholder_svg(wanted), media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=3600"})

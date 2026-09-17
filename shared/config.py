@@ -59,3 +59,8 @@ HOURLY_KEEP_DAYS = _int("HOURLY_KEEP_DAYS", 90)
 
 # How often the worker runs that clean-up, in hours.
 CLEANUP_EVERY_HOURS = _int("CLEANUP_EVERY_HOURS", 24)
+
+# ---------- coin info ----------
+
+# The API's public address, used to build full logo links.
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://scanbase-api.up.railway.app").rstrip("/")

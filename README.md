@@ -29,6 +29,7 @@ scanbase/
 │
 ├── serve/                  ISSUING data
 │   ├── main.py             the API endpoints (Railway service 2)
+│   ├── logos.py            logo links + generated placeholder
 │   └── auth.py             API keys (stored hashed) + rate limits
 │
 ├── shared/config.py        every setting in one place
@@ -52,6 +53,9 @@ Interactive docs: `https://scanbase-api.up.railway.app/docs`
 | `GET /v1/status` | Yes | Whether each exchange is working, last error |
 | `GET /v1/ticker/{symbol}` | Yes | Price of one pair on every exchange, with age and `is_stale` |
 | `GET /v1/markets?exchange=` | Yes | Every tracked pair |
+| `GET /v1/coins?search=&limit=&offset=` | Yes | Coin list with logo links |
+| `GET /v1/coins/{slug or symbol}` | Yes | Full coin info + live USDT price and market cap |
+| `GET /v1/logos/{symbol}` | No | Logo image (generated circle if none) — usable in `<img>` |
 | `GET /v1/history/{symbol}?interval=hour\|day&days=7&exchange=` | Yes | Past prices: hourly (90 days) or daily open/high/low/close |
 
 Keys go in the `X-API-Key` header. `401` = bad key, `429` = over hourly limit.
@@ -71,6 +75,7 @@ uvicorn serve.main:app --reload # API at http://localhost:8000/docs
 python3 -m scripts.create_key "CoinScanner"
 python3 -m scripts.db_size      # table sizes
 python3 -m scripts.cleanup      # run history clean-up by hand
+python3 -m scripts.import_coinscanner <cs .env> <logos folder>   # copy coin info + logos
 ```
 
 First time on a Mac: `bash setup_mac.sh <path to old folder>` does the
@@ -116,6 +121,7 @@ Set as variables on Railway (defaults in `shared/config.py`):
 | `MIN_HISTORY_VOLUME_USD` | 10000 | Minimum 24h dollar volume for history |
 | `HOURLY_KEEP_DAYS` | 90 | Hourly rows older than this become daily |
 | `CLEANUP_EVERY_HOURS` | 24 | How often the worker cleans up |
+| `PUBLIC_BASE_URL` | https://scanbase-api.up.railway.app | Used to build logo links |
 
 ## Deployment (Railway)
 
