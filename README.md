@@ -83,6 +83,7 @@ python3 -m scripts.create_key "CoinScanner"
 python3 -m scripts.db_size      # table sizes
 python3 -m scripts.cleanup      # run history clean-up by hand
 python3 -m scripts.import_coinscanner <cs .env> <logos folder>   # copy coin info + logos
+python3 -m scripts.fetch_logos  # find real logos (Trust Wallet, then icons set); runs on your Mac
 ```
 
 First time on a Mac: `bash setup_mac.sh <path to old folder>` does the
@@ -140,3 +141,10 @@ Two services, same code, different start commands:
 | api | `uvicorn serve.main:app --host 0.0.0.0 --port $PORT` |
 
 Python is pinned to 3.11 via `.python-version`.
+
+## Logos
+
+Order of preference: Trust Wallet (MIT) → cryptocurrency-icons (CC0) →
+CoinScanner copy → generated circle. `scripts/fetch_logos.py` runs on a
+laptop, so fetching costs nothing on the server. Logos are served with a
+7-day browser cache. Licences: see `THIRD_PARTY_NOTICES.md`.

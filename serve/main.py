@@ -34,7 +34,7 @@ app = FastAPI(
         "Live crypto prices collected from multiple exchanges, in one "
         "standard format. Send your key in the `X-API-Key` header."
     ),
-    version="0.6.1",
+    version="0.7.0",
 )
 
 
@@ -450,11 +450,13 @@ def get_logo(symbol: str):
         ).fetchone()
 
     if row:
+        # Logos rarely change: let browsers and CDNs keep them for a week,
+        # so repeat visits don't hit our server at all (saves cost).
         return Response(content=bytes(row[1]), media_type=row[0],
-                        headers={"Cache-Control": "public, max-age=86400"})
+                        headers={"Cache-Control": "public, max-age=604800"})
 
     return Response(content=placeholder_svg(wanted), media_type="image/svg+xml",
-                    headers={"Cache-Control": "public, max-age=3600"})
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 
