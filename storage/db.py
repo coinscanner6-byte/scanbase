@@ -53,6 +53,10 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
     covering every row and sends it once, which is what actually makes
     this fast over a slow connection.
 
+    page_size=1000 sends up to 1,000 rows per trip (the default is 100).
+    The worker runs in Singapore and the database in California, so
+    fewer trips makes each round much faster.
+
     'history_rows' is the subset worth keeping in permanent hourly
     history (see ingest/history_filter.py). If not given, every row
     goes into history, as before.
@@ -105,6 +109,7 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
                     collected_at = EXCLUDED.collected_at
                 """,
                 latest_values,
+                page_size=1000,
             )
             if hourly_values:
                 execute_values(
@@ -116,6 +121,7 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
                     ON CONFLICT (exchange_id, symbol, hour_bucket) DO NOTHING
                     """,
                     hourly_values,
+                    page_size=1000,
                 )
         raw_conn.commit()
     finally:
@@ -125,7 +131,10 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
 
 
 def record_success(exchange_id, saved_count, at):
-    """Notes that this exchange worked this round."""
+    """
+    Notes that this exchange worked this round, and clears any old
+    error - once an exchange recovers, /v1/status stops showing it.
+    """
     with engine.begin() as conn:
         conn.execute(
             text("""
@@ -134,6 +143,8 @@ def record_success(exchange_id, saved_count, at):
                 ON CONFLICT (exchange_id) DO UPDATE SET
                     last_success_at = EXCLUDED.last_success_at,
                     last_saved_count = EXCLUDED.last_saved_count,
+                    last_error_at = NULL,
+                    last_error = NULL,
                     updated_at = EXCLUDED.updated_at
             """),
             {"id": exchange_id, "count": saved_count, "at": at},
