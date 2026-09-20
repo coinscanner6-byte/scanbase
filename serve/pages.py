@@ -86,16 +86,17 @@ h1 { font-size: clamp(32px, 4.2vw, 46px); font-weight: 700; line-height: 1.12;
   font-weight: 600; letter-spacing: .06em; }
 .live i { width: 6px; height: 6px; border-radius: 50%; background: #4ADE80; display: block; }
 .board-head .who { font-size: 13.5px; color: var(--muted); font-family: var(--mono); }
-.sides { display: grid; grid-template-columns: 1fr auto 1fr; }
-.side { padding: 26px 22px; }
+.sides { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); }
+.side { padding: 26px 20px; min-width: 0; }
 .side.right { text-align: right; }
 .side h3 { margin: 0 0 9px; font-size: 13px; font-weight: 600; color: var(--muted); }
-.rate { font-size: clamp(24px, 3.1vw, 32px); font-weight: 700; letter-spacing: -.025em; }
+.rate { font-size: clamp(21px, 2.5vw, 29px); font-weight: 700;
+        letter-spacing: -.03em; white-space: nowrap; }
 .side p { margin: 9px 0 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
 .gap { border-left: 1px solid var(--line); border-right: 1px solid var(--line);
-       padding: 26px 20px; text-align: center; min-width: 150px;
+       padding: 26px 16px; text-align: center; min-width: 128px;
        display: flex; flex-direction: column; justify-content: center; }
-.gap .big { font-size: 27px; font-weight: 700; color: var(--blue); letter-spacing: -.02em; }
+.gap .big { font-size: 25px; white-space: nowrap; font-weight: 700; color: var(--blue); letter-spacing: -.02em; }
 .gap .label { font-size: 12.5px; color: var(--muted); margin-top: 5px; line-height: 1.4; }
 .board-foot { padding: 12px 18px; border-top: 1px solid var(--line);
   background: #FBFCFE; font-size: 12.5px; color: var(--muted); font-family: var(--mono); }
