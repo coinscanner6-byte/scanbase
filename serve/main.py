@@ -20,7 +20,8 @@ from fastapi import FastAPI, HTTPException, Header, Query
 from fastapi.responses import Response, HTMLResponse
 from sqlalchemy import text
 
-from shared.config import STALE_AFTER_SECONDS, HOURLY_KEEP_DAYS, PUBLIC_BASE_URL
+from shared.config import (STALE_AFTER_SECONDS, HOURLY_KEEP_DAYS, PUBLIC_BASE_URL,
+                           TDS_PCT, GST_ON_FEE_PCT, FEE_STALE_DAYS)
 from storage.db import engine
 from ingest.symbols import standardise
 from serve.auth import check_key
@@ -30,6 +31,7 @@ from serve.markets import compute_premium, premium_table, rank_best
 from serve.quality_score import score_exchange
 from storage.fx import load_rate
 from serve.pages import landing_html, docs_html
+from shared.calc import trade_cost
 from ingest.quality import price_flags, aggregate, group_key
 
 TAGS = [
@@ -1067,3 +1069,97 @@ def demo_snapshot():
     }
     _snapshot.update({"at": now, "data": data})
     return data
+
+
+
+# ---------- what a trade really costs in India ----------
+
+@app.get("/v1/cost/{coin}", tags=["India"])
+def true_cost(
+    coin: str,
+    amount_inr: float = Query(100000, gt=0, description="Rupees you plan to spend or sell"),
+    side: str = Query("buy", description="buy or sell"),
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    The real cost of buying or selling a coin on each Indian exchange:
+    the exchange's own price, its fee, GST on that fee, and TDS on a
+    sale - measured against the coin's plain dollar value at the
+    ordinary bank rate.
+
+    Exchanges are ranked cheapest first. Any exchange whose published
+    fee we have not verified is listed but left out of the ranking,
+    because a guessed fee is worse than an admitted gap.
+    """
+    require_key(x_api_key)
+    if side not in ("buy", "sell"):
+        raise HTTPException(status_code=400, detail="side must be buy or sell")
+
+    now = datetime.now(timezone.utc)
+
+    with engine.connect() as conn:
+        slug, symbol = resolve_coin(conn, coin)
+        name = conn.execute(text(
+            "SELECT name FROM coins WHERE slug = :s"), {"s": slug}).scalar() if slug else None
+        usd = conn.execute(text(
+            "SELECT price FROM index_latest WHERE base = :b AND currency = 'USD'"
+        ), {"b": symbol}).scalar()
+        usd_inr_bank, bank_at = load_rate(conn)
+        rows = conn.execute(text("""
+            SELECT e.slug, e.name, p.price, p.collected_at,
+                   f.fee_model, f.maker_pct, f.taker_pct, f.subscription_inr,
+                   f.source_url, f.verified_on, f.notes
+            FROM prices_latest p
+            JOIN exchanges e ON e.id = p.exchange_id
+            LEFT JOIN exchange_fees f ON f.slug = e.slug
+            WHERE p.symbol_std = :pair AND e.country = 'IN' AND e.is_active = TRUE
+        """), {"pair": f"{symbol}-INR"}).mappings().all()
+
+    if not rows:
+        raise HTTPException(status_code=404,
+                            detail=f"No Indian exchange is quoting {symbol} in INR")
+
+    fair_value = float(usd) * usd_inr_bank if usd and usd_inr_bank else None
+
+    priced, unknown = [], []
+    for r in rows:
+        entry = {
+            "exchange": r["slug"],
+            "name": r["name"],
+            "price": float(r["price"]),
+            "age_seconds": age_in_seconds(r["collected_at"], now),
+            "fee_source": r["source_url"],
+            "fee_verified_on": r["verified_on"].isoformat() if r["verified_on"] else None,
+            "fee_note": r["notes"],
+        }
+        if r["taker_pct"] is None and r["fee_model"] != "subscription":
+            entry["fee_known"] = False
+            unknown.append(entry)
+            continue
+        cost = trade_cost(side, amount_inr, float(r["price"]), fair_value, dict(r),
+                          TDS_PCT, GST_ON_FEE_PCT)
+        stale = (r["verified_on"] is None
+                 or (now.date() - r["verified_on"]).days > FEE_STALE_DAYS)
+        entry.update(cost or {})
+        entry.update({"fee_known": True, "fee_may_be_out_of_date": stale})
+        priced.append(entry)
+
+    # Cheapest first: least paid on a buy, most received on a sale.
+    priced.sort(key=lambda e: (e["effective_price"] if side == "buy"
+                               else -(e["rupees_received"] or 0)))
+
+    return {
+        "symbol": symbol,
+        "coin_id": slug,
+        "name": name,
+        "side": side,
+        "amount_inr": amount_inr,
+        "usd_price": float(usd) if usd else None,
+        "usd_inr_bank": usd_inr_bank,
+        "bank_rate_updated_at": bank_at.isoformat() if bank_at else None,
+        "fair_value_inr": fair_value,
+        "tds_pct": TDS_PCT if side == "sell" else 0.0,
+        "gst_on_fee_pct": GST_ON_FEE_PCT,
+        "cheapest": priced[0]["exchange"] if priced else None,
+        "exchanges": priced + unknown,
+    }

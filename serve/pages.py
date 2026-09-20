@@ -230,6 +230,11 @@ footer a { color: var(--muted); }
         <td>Is a buyer paying more than the plain dollar value of the coin at the bank rate?</td>
         <td class="m">A few percent</td>
       </tr>
+      <tr>
+        <td><code>/v1/cost</code></td>
+        <td>And once the exchange's fee, GST and TDS are added, what does the trade actually cost?</td>
+        <td class="m">More again</td>
+      </tr>
     </table></div>
   </section>
 
@@ -242,6 +247,7 @@ footer a { color: var(--muted); }
       <tr><td><span class="path">/v1/prices</span></td><td>Market list: price, market cap, 1h, 24h and 7d change, sortable</td></tr>
       <tr><td><span class="path">/v1/prices/{coin}</span></td><td>One coin in dollars and rupees, with both premiums</td></tr>
       <tr><td><span class="path">/v1/candles/{coin}</span></td><td>Open, high, low, close of the official price</td></tr>
+      <tr><td><span class="path">/v1/cost/{coin}</span></td><td>What a trade really costs on each Indian exchange, cheapest first</td></tr>
       <tr><td><span class="path">/v1/global</span></td><td>Combined market cap, volume, Bitcoin's share</td></tr>
       <tr><td><span class="path">/v1/ticker/{symbol}</span></td><td>One pair on every exchange, with quality flags</td></tr>
       <tr><td><span class="path">/v1/best/{symbol}</span></td><td>Cheapest place to buy, best place to sell</td></tr>

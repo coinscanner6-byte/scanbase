@@ -106,3 +106,14 @@ FIAT_RATE_URL = os.getenv("FIAT_RATE_URL", "https://api.exchangerate-api.com/v4/
 # If a candle is missing at the exact hour we want to compare against,
 # look back at most this many hours for the nearest one.
 CHANGE_LOOKBACK_HOURS = _int("CHANGE_LOOKBACK_HOURS", 3)
+
+# ---------- Indian taxes and fees (Batch 3) ----------
+
+# Set by law, not by any exchange. TDS is deducted when you SELL a coin,
+# not when you buy. GST applies to the exchange's fee, not to the trade.
+TDS_PCT = float(os.getenv("TDS_PCT", "1.0"))
+GST_ON_FEE_PCT = float(os.getenv("GST_ON_FEE_PCT", "18.0"))
+
+# Past this many days, a stored exchange fee is called approximate
+# rather than presented as fact.
+FEE_STALE_DAYS = _int("FEE_STALE_DAYS", 180)
