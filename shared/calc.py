@@ -91,3 +91,45 @@ def trade_cost(side, amount_inr, exchange_price, fair_value, fee,
             else None
         ),
     }
+
+
+# Exchanges list leveraged tokens next to real coins: DOGE3L is a
+# derivative that decays in value, not Dogecoin. They are dangerous for
+# ordinary buyers, so they never appear in a search box.
+# A number-and-letter ending is unambiguous: nothing real is called
+# something3L.
+NUMERIC_SUFFIXES = tuple(f"{n}{d}" for n in "2345" for d in "LS")
+
+# A word ending is NOT safe on its own - SYRUP ends in UP and is a real
+# token - so these only count when what comes before is a major coin,
+# which is the only kind these products are ever built on.
+WORD_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR", "HEDGE")
+LEVERAGED_BASES = {
+    "BTC", "ETH", "BNB", "XRP", "DOGE", "SOL", "ADA", "LINK", "DOT", "LTC",
+    "TRX", "AVAX", "MATIC", "UNI", "ATOM", "EOS", "FIL", "AAVE", "ALGO",
+    "VET", "NEAR", "SAND", "AXS", "FTM", "SUSHI", "XTZ", "BCH", "ETC", "SHIB",
+}
+
+
+def is_leveraged_token(symbol):
+    """
+    True for things like DOGE3L, BTCUP, ETHBEAR.
+
+    These are derivatives that lose value over time, not coins. They sit
+    next to real coins in an exchange's list, and offering one to an
+    ordinary buyer searching for Dogecoin would be doing them harm.
+    """
+    s = (symbol or "").upper()
+    if any(s.endswith(x) and len(s) > len(x) for x in NUMERIC_SUFFIXES):
+        return True
+    for suffix in WORD_SUFFIXES:
+        if s.endswith(suffix) and s[:-len(suffix)] in LEVERAGED_BASES:
+            return True
+    return False
+
+
+# The quote currencies an ordinary reader cares about. Everything else -
+# lira, real, yen, and dead stablecoins like BUSD and TUSD whose prices
+# have drifted hundreds of dollars from the market - is noise, and in
+# the dead cases is actively wrong.
+USEFUL_QUOTES = ("INR", "USDT", "USDC", "USD")

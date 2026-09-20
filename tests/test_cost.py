@@ -48,3 +48,25 @@ def test_a_cheaper_quote_wins_even_with_a_higher_fee():
 @pytest.mark.parametrize("amount,price", [(0, PRICE), (100000, 0), (-5, PRICE)])
 def test_nonsense_input_returns_nothing(amount, price):
     assert trade_cost("buy", amount, price, FAIR, PCT) is None
+
+
+# ---------- keeping dangerous and dead things out of sight ----------
+
+from shared.calc import is_leveraged_token, USEFUL_QUOTES
+
+
+def test_leveraged_tokens_are_recognised():
+    for fake in ("DOGE3L", "DOGE5S", "BTC2L", "BTCUP", "BTCDOWN", "ETHBEAR", "XRPBULL"):
+        assert is_leveraged_token(fake), fake
+
+
+def test_real_coins_are_never_mistaken_for_one():
+    # SYRUP ends in UP and BEARS ends in BEAR - both are real tokens
+    for real in ("BTC", "DOGE", "SYRUP", "PUMP", "BEARS", "SUPER", "UP", "DOWN", "TRUMP"):
+        assert not is_leveraged_token(real), real
+
+
+def test_only_rupee_and_dollar_pairs_are_useful():
+    assert set(USEFUL_QUOTES) == {"INR", "USDT", "USDC", "USD"}
+    for junk in ("TRY", "BRL", "JPY", "BUSD", "TUSD", "EUR"):
+        assert junk not in USEFUL_QUOTES

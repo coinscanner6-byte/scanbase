@@ -61,7 +61,7 @@ Interactive docs: `https://scanbase-api.up.railway.app/docs`
 | `GET /v1/global?currency=usd\|inr` | Yes | Market totals: combined market cap, volume, BTC and ETH share |
 | `GET /v1/cost/{coin}?amount_inr=&side=buy\|sell` | Yes | **True cost**: every Indian exchange ranked by what a trade really costs |
 | `GET /v1/search?q=&limit=` | Yes | Find a coin by symbol, name or slug |
-| `GET /v1/availability/{coin}` | Yes | Which exchanges quote this coin, and whether it can be bought with rupees |
+| `GET /v1/availability/{coin}?all=` | Yes | Which exchanges quote this coin, and whether it can be bought with rupees |
 | `GET /v1/candles/{coin}?currency=&interval=1h\|1d&days=` | Yes | Candles of the official price (listed coins) |
 | `GET /v1/exchanges/{slug}` | Yes | One exchange: quality rating and daily stats |
 | `GET /v1/exchanges` | Yes | Exchanges we collect from, with quality rating |
@@ -308,3 +308,21 @@ answer can never claim to be fresher than it is.
 
 No Redis and no extra service. The cache lives in memory, empties on
 restart, and is a shock absorber rather than storage.
+
+## What we deliberately hide
+
+**Leveraged tokens.** Exchanges list DOGE3L and BTCUP right beside the
+real coin. They are derivatives that lose value over time, and handing
+one to somebody who searched for Dogecoin would be doing them harm, so
+`/v1/search` never returns them. The test is careful: a number-and-letter
+ending is unambiguous, while a word ending only counts when what comes
+before it is a major coin - SYRUP ends in UP and is a real token.
+
+**Junk quote pairs.** `/v1/availability` shows rupee and dollar pairs by
+default. Lira, real and yen pairs mean nothing to an Indian reader, and
+dead stablecoin pairs carry prices that drifted long ago: BUSD quotes
+Bitcoin near $42,000 and TUSD near $74,000 while the market sits at
+$80,500. Pass `all=true` to see everything.
+
+Those dead pairs never touched the official price - the outlier filter
+had already thrown them out - but they should not be shown either.
