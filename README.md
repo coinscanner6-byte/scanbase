@@ -4,6 +4,55 @@ Internal name for **CoinScanner API** — collects live crypto prices from
 multiple exchanges, cleans them into one standard format, stores them,
 and serves them through an API. CoinScanner is its first customer.
 
+## Contents
+
+**Start here**  
+[Running locally](#running-locally) · [How the code is organised](#how-the-code-is-organised)
+
+**The API**  
+[Endpoints](#endpoints) · [Caching](#caching)
+
+**How the numbers are made**  
+[Official prices](#official-prices-how-they-are-calculated) · [True dollar prices](#true-dollar-prices) · [Market cap and ranking](#market-cap-and-ranking) · [Price changes](#price-changes) · [Exchange quality rating](#exchange-quality-rating-last-7-days) · [Breakage detection](#breakage-detection)
+
+**The India work**  
+[The two India premiums](#the-two-india-premiums) · [What a trade really costs in India](#what-a-trade-really-costs-in-india)
+
+**What the data does and does not include**  
+[Storage: what is kept, and for how long](#storage-what-is-kept-and-for-how-long) · [Pairs that quietly disappear](#pairs-that-quietly-disappear) · [What we deliberately hide](#what-we-deliberately-hide)
+
+**Running it**  
+[Settings](#settings) · [Deployment](#deployment-railway) · [Adding an exchange](#adding-an-exchange) · [Logos](#logos)
+
+
+---
+
+# Start here
+
+## Running locally
+
+```bash
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+cp .env.example .env            # then put your DATABASE_URL in it
+
+python3 -m pytest               # offline tests
+python3 -m scripts.migrate      # create / update tables
+python3 -m scripts.run_once     # one collection round (or: run_once binance)
+python3 -m ingest.worker        # run forever
+uvicorn serve.main:app --reload # API at http://localhost:8000/docs
+python3 -m scripts.create_key "CoinScanner"
+python3 -m scripts.db_size      # table sizes
+python3 -m scripts.cleanup      # run history clean-up by hand
+python3 -m scripts.import_coinscanner <cs .env> <logos folder>   # copy coin info + logos
+python3 -m scripts.fetch_logos  # find real logos (Trust Wallet, then icons set); runs on your Mac
+```
+
+First time on a Mac: `bash setup_mac.sh <path to old folder>` does the
+venv, install, copies `.env`, runs tests and shows DB size.
+
+Always run commands from the project folder, using `python3 -m`.
+
 ## How the code is organised
 
 The code follows the path the data takes: **GET → CHECK → STORE → ISSUE**.
@@ -46,7 +95,12 @@ scanbase/
 **Rule:** `ingest` never serves, `serve` never collects, and only
 `storage/db.py` opens database connections.
 
-## API
+
+---
+
+# The API
+
+## Endpoints
 
 Interactive docs: `https://scanbase-api.up.railway.app/docs`
 
@@ -78,87 +132,24 @@ Interactive docs: `https://scanbase-api.up.railway.app/docs`
 
 Keys go in the `X-API-Key` header. `401` = bad key, `429` = over hourly limit.
 
-## Running locally
+## Caching
 
-```bash
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-cp .env.example .env            # then put your DATABASE_URL in it
+`/v1/prices` and `/v1/global` hold their answers for 30 seconds in the
+API process. Prices only refresh every few minutes, so nothing is made
+staler than it already was, and repeated identical requests stop
+reaching the database.
 
-python3 -m pytest               # offline tests
-python3 -m scripts.migrate      # create / update tables
-python3 -m scripts.run_once     # one collection round (or: run_once binance)
-python3 -m ingest.worker        # run forever
-uvicorn serve.main:app --reload # API at http://localhost:8000/docs
-python3 -m scripts.create_key "CoinScanner"
-python3 -m scripts.db_size      # table sizes
-python3 -m scripts.cleanup      # run history clean-up by hand
-python3 -m scripts.import_coinscanner <cs .env> <logos folder>   # copy coin info + logos
-python3 -m scripts.fetch_logos  # find real logos (Trust Wallet, then icons set); runs on your Mac
-```
+Only the query is cached, never the age of a price: how old a price is
+gets worked out against the real clock on every request, so a cached
+answer can never claim to be fresher than it is.
 
-First time on a Mac: `bash setup_mac.sh <path to old folder>` does the
-venv, install, copies `.env`, runs tests and shows DB size.
+No Redis and no extra service. The cache lives in memory, empties on
+restart, and is a shock absorber rather than storage.
 
-Always run commands from the project folder, using `python3 -m`.
 
-## Adding an exchange
+---
 
-1. Copy `ingest/exchanges/_template.py` → `ingest/exchanges/kucoin.py`
-2. Fill in `SLUG`, `NAME`, `URL`, `FIELDS` (and `extract()` if needed)
-3. Add a sample reply for it in `tests/test_exchanges.py`, run `pytest`
-4. `INSERT INTO exchanges (slug, name) VALUES ('kucoin', 'KuCoin');`
-5. `python3 -m scripts.run_once kucoin` → deploy
-
-No other file changes. The worker picks it up by itself.
-
-## Storage: what is kept, and for how long
-
-| Table | Holds | Growth |
-|---|---|---|
-| `prices_latest` | Every pair, current price | Fixed — overwritten each round |
-| `prices_hourly` | Useful pairs only, last 90 days | Fixed window |
-| `prices_daily` | Older history, 1 row per pair per day | Slow |
-
-"Useful" = priced in USDT/USDC with at least $10,000 traded in 24h,
-or any INR pair (`ingest/history_filter.py`). Every pair is still
-available live. The worker runs the clean-up once a day.
-
-## Settings
-
-Set as variables on Railway (defaults in `shared/config.py`):
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `DATABASE_URL` | — | Required |
-| `SECONDS_BETWEEN_RUNS` | 60 | Gap between collection rounds |
-| `STALE_AFTER_SECONDS` | 300 | Price older than this is marked stale |
-| `DEFAULT_TIMEOUT_SECONDS` | 15 | Wait for an exchange before giving up |
-| `DEFAULT_RATE_LIMIT` | 1000 | Hourly requests for new keys |
-| `HISTORY_QUOTES` | USDT,USDC,INR | Pairs in these currencies can enter history |
-| `HISTORY_ALWAYS_KEEP_QUOTES` | INR | Kept regardless of volume |
-| `MIN_HISTORY_VOLUME_USD` | 10000 | Minimum 24h dollar volume for history |
-| `HOURLY_KEEP_DAYS` | 90 | Hourly rows older than this become daily |
-| `CLEANUP_EVERY_HOURS` | 24 | How often the worker cleans up |
-| `PUBLIC_BASE_URL` | https://scanbase-api.up.railway.app | Used to build logo links |
-
-## Deployment (Railway)
-
-Two services, same code, different start commands:
-
-| Service | Start command |
-|---|---|
-| worker | `python3 -m ingest.worker` |
-| api | `uvicorn serve.main:app --host 0.0.0.0 --port $PORT` |
-
-Python is pinned to 3.11 via `.python-version`.
-
-## Logos
-
-Order of preference: Trust Wallet (MIT) → cryptocurrency-icons (CC0) →
-CoinScanner copy → generated circle. `scripts/fetch_logos.py` runs on a
-laptop, so fetching costs nothing on the server. Logos are served with a
-7-day browser cache. Licences: see `THIRD_PARTY_NOTICES.md`.
+# How the numbers are made
 
 ## Official prices (how they are calculated)
 
@@ -181,18 +172,6 @@ official price per coin:
 
 Candles of the official price are built from these per-minute values
 for listed coins: hourly for 90 days, then daily.
-
-## Exchange quality rating (last 7 days)
-
-Uptime 30%, accuracy vs official price 35% (outliers penalised),
-tight buy/sell gaps 20%, real trades vs estimates 15%. Grades A/B/C/D.
-More than 20% outlier prices, or an average gap over 5%, is always D.
-Shown after 30+ rounds.
-
-## Breakage detection
-
-An exchange returning zero valid prices is recorded as a failure. One
-returning less than half its usual pairs gets a warning in `/v1/status`.
 
 ## True dollar prices
 
@@ -230,6 +209,23 @@ Changes exist only for coins with candles, which means listed coins,
 and only for windows we actually have. A brand new install shows an
 empty 7d change for a week. That is deliberate: an empty number is
 honest, a made-up one is not.
+
+## Exchange quality rating (last 7 days)
+
+Uptime 30%, accuracy vs official price 35% (outliers penalised),
+tight buy/sell gaps 20%, real trades vs estimates 15%. Grades A/B/C/D.
+More than 20% outlier prices, or an average gap over 5%, is always D.
+Shown after 30+ rounds.
+
+## Breakage detection
+
+An exchange returning zero valid prices is recorded as a failure. One
+returning less than half its usual pairs gets a warning in `/v1/status`.
+
+
+---
+
+# The India work
 
 ## The two India premiums
 
@@ -282,6 +278,23 @@ not apply to ordinary buyers.
 
 To update a rate, edit the row and set `verified_on` to today.
 
+
+---
+
+# What the data does and does not include
+
+## Storage: what is kept, and for how long
+
+| Table | Holds | Growth |
+|---|---|---|
+| `prices_latest` | Every pair, current price | Fixed — overwritten each round |
+| `prices_hourly` | Useful pairs only, last 90 days | Fixed window |
+| `prices_daily` | Older history, 1 row per pair per day | Slow |
+
+"Useful" = priced in USDT/USDC with at least $10,000 traded in 24h,
+or any INR pair (`ingest/history_filter.py`). Every pair is still
+available live. The worker runs the clean-up once a day.
+
 ## Pairs that quietly disappear
 
 When an exchange stops quoting a pair, its last price used to sit in
@@ -294,20 +307,6 @@ so any row left hours behind is one the exchange has stopped returning.
 Those rows are deleted as part of the same save. `VANISHED_PAIR_HOURS`
 (6 by default) is the grace period, long enough that a few failed
 rounds cannot wipe good pairs.
-
-## Caching
-
-`/v1/prices` and `/v1/global` hold their answers for 30 seconds in the
-API process. Prices only refresh every few minutes, so nothing is made
-staler than it already was, and repeated identical requests stop
-reaching the database.
-
-Only the query is cached, never the age of a price: how old a price is
-gets worked out against the real clock on every request, so a cached
-answer can never claim to be fresher than it is.
-
-No Redis and no extra service. The cache lives in memory, empties on
-restart, and is a shock absorber rather than storage.
 
 ## What we deliberately hide
 
@@ -326,3 +325,55 @@ $80,500. Pass `all=true` to see everything.
 
 Those dead pairs never touched the official price - the outlier filter
 had already thrown them out - but they should not be shown either.
+
+
+---
+
+# Running it
+
+## Settings
+
+Set as variables on Railway (defaults in `shared/config.py`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DATABASE_URL` | — | Required |
+| `SECONDS_BETWEEN_RUNS` | 60 | Gap between collection rounds |
+| `STALE_AFTER_SECONDS` | 300 | Price older than this is marked stale |
+| `DEFAULT_TIMEOUT_SECONDS` | 15 | Wait for an exchange before giving up |
+| `DEFAULT_RATE_LIMIT` | 1000 | Hourly requests for new keys |
+| `HISTORY_QUOTES` | USDT,USDC,INR | Pairs in these currencies can enter history |
+| `HISTORY_ALWAYS_KEEP_QUOTES` | INR | Kept regardless of volume |
+| `MIN_HISTORY_VOLUME_USD` | 10000 | Minimum 24h dollar volume for history |
+| `HOURLY_KEEP_DAYS` | 90 | Hourly rows older than this become daily |
+| `CLEANUP_EVERY_HOURS` | 24 | How often the worker cleans up |
+| `PUBLIC_BASE_URL` | https://scanbase-api.up.railway.app | Used to build logo links |
+
+## Deployment (Railway)
+
+Two services, same code, different start commands:
+
+| Service | Start command |
+|---|---|
+| worker | `python3 -m ingest.worker` |
+| api | `uvicorn serve.main:app --host 0.0.0.0 --port $PORT` |
+
+Python is pinned to 3.11 via `.python-version`.
+
+## Adding an exchange
+
+1. Copy `ingest/exchanges/_template.py` → `ingest/exchanges/kucoin.py`
+2. Fill in `SLUG`, `NAME`, `URL`, `FIELDS` (and `extract()` if needed)
+3. Add a sample reply for it in `tests/test_exchanges.py`, run `pytest`
+4. `INSERT INTO exchanges (slug, name) VALUES ('kucoin', 'KuCoin');`
+5. `python3 -m scripts.run_once kucoin` → deploy
+
+No other file changes. The worker picks it up by itself.
+
+## Logos
+
+Order of preference: Trust Wallet (MIT) → cryptocurrency-icons (CC0) →
+CoinScanner copy → generated circle. `scripts/fetch_logos.py` runs on a
+laptop, so fetching costs nothing on the server. Logos are served with a
+7-day browser cache. Licences: see `THIRD_PARTY_NOTICES.md`.
+
