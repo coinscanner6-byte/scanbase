@@ -31,6 +31,7 @@ from serve.markets import compute_premium, premium_table, rank_best
 from serve.quality_score import score_exchange
 from storage.fx import load_rate
 from serve.pages import landing_html, docs_html
+from serve.cache import cached
 from shared.calc import trade_cost
 from ingest.quality import price_flags, aggregate, group_key
 
@@ -768,18 +769,28 @@ def list_prices(
         ) c ON TRUE
         WHERE {where_sql}
     """
-    with engine.connect() as conn:
-        total = conn.execute(text(f"SELECT count(*) {base_sql}"), params).scalar()
-        rows = conn.execute(text(f"""
-            SELECT i.*, c.slug, c.name, c.rank,
-                   CASE WHEN i.market_cap IS NOT NULL THEN (
-                       SELECT count(*) + 1 FROM index_latest x
-                       WHERE x.currency = i.currency AND x.market_cap > i.market_cap
-                   ) END AS market_cap_rank
-            {base_sql}
-            ORDER BY {order_sql}
-            LIMIT :limit OFFSET :offset
-        """), params).mappings().all()
+    def run_query():
+        with engine.connect() as conn:
+            total = conn.execute(text(f"SELECT count(*) {base_sql}"), params).scalar()
+            rows = conn.execute(text(f"""
+                SELECT i.*, c.slug, c.name, c.rank,
+                       CASE WHEN i.market_cap IS NOT NULL THEN (
+                           SELECT count(*) + 1 FROM index_latest x
+                           WHERE x.currency = i.currency AND x.market_cap > i.market_cap
+                       ) END AS market_cap_rank
+                {base_sql}
+                ORDER BY {order_sql}
+                LIMIT :limit OFFSET :offset
+            """), params).mappings().all()
+        return total, rows
+
+    # Only the query is cached. Ages are worked out below against the
+    # real clock, so a cached answer can never claim to be fresher than
+    # it is.
+    total, rows = cached(
+        f"prices:{cur}:{symbols}:{listed_only}:{sort_key}:{order}:{limit}:{offset}",
+        run_query,
+    )
 
     now = datetime.now(timezone.utc)
     return {
@@ -978,6 +989,10 @@ def global_stats(
     if cur not in ("USD", "INR"):
         raise HTTPException(status_code=400, detail="currency must be usd or inr")
 
+    return cached(f"global:{cur}", lambda: _global_stats(cur))
+
+
+def _global_stats(cur):
     with engine.connect() as conn:
         totals = conn.execute(text("""
             SELECT count(*),
@@ -1174,3 +1189,133 @@ def true_cost(
         "cheapest": priced[0]["exchange"] if priced else None,
         "exchanges": priced + unknown,
     }
+
+
+
+# ---------- finding a coin ----------
+
+@app.get("/v1/search", tags=["Coins"])
+def search(
+    q: str = Query(..., min_length=1, max_length=40, description="Symbol, name or slug"),
+    limit: int = Query(10, ge=1, le=50),
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
+):
+    """
+    Find a coin by symbol, name or slug - what a search box needs.
+
+    Coins with a page of their own come first, best-ranked first, and an
+    exact symbol match always wins. Coins we price but have no page for
+    are included after those, so a search never comes back empty just
+    because we lack a description.
+    """
+    require_key(x_api_key)
+    term = q.strip()
+
+    def build():
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT c.slug, UPPER(c.symbol) AS symbol, c.name, c.rank,
+                       i.price AS usd_price, i.market_cap
+                FROM coins c
+                LEFT JOIN index_latest i
+                       ON i.base = UPPER(c.symbol) AND i.currency = 'USD'
+                WHERE c.is_active = TRUE
+                  AND (UPPER(c.symbol) = UPPER(:exact)
+                       OR c.slug ILIKE :like
+                       OR c.name ILIKE :like
+                       OR UPPER(c.symbol) LIKE UPPER(:prefix))
+                ORDER BY (UPPER(c.symbol) = UPPER(:exact)) DESC,
+                         (c.name ILIKE :prefix) DESC,
+                         i.market_cap DESC NULLS LAST,
+                         c.rank NULLS LAST
+                LIMIT :limit
+            """), {"exact": term, "like": f"%{term}%", "prefix": f"{term}%",
+                   "limit": limit}).mappings().all()
+
+            found = [{
+                "symbol": r["symbol"], "coin_id": r["slug"], "name": r["name"],
+                "rank": r["rank"], "logo_url": logo_url(r["symbol"]),
+                "usd_price": num(r["usd_price"]), "market_cap": num(r["market_cap"]),
+                "has_page": True,
+            } for r in rows]
+
+            # Room left over? Fill it with coins we price but cannot
+            # describe, rather than returning a short list.
+            if len(found) < limit:
+                known = [f["symbol"] for f in found] or [""]
+                extra = conn.execute(text("""
+                    SELECT base, price FROM index_latest
+                    WHERE currency = 'USD' AND base LIKE UPPER(:prefix)
+                      AND base <> ALL(:known)
+                    ORDER BY volume_quote DESC NULLS LAST
+                    LIMIT :limit
+                """), {"prefix": f"{term}%", "known": known,
+                       "limit": limit - len(found)}).mappings().all()
+                found += [{
+                    "symbol": r["base"], "coin_id": None, "name": None, "rank": None,
+                    "logo_url": logo_url(r["base"]), "usd_price": num(r["price"]),
+                    "market_cap": None, "has_page": False,
+                } for r in extra]
+        return {"query": term, "count": len(found), "results": found}
+
+    return cached(f"search:{term.lower()}:{limit}", build)
+
+
+# ---------- where a coin can be bought ----------
+
+@app.get("/v1/availability/{coin}", tags=["Exchanges"])
+def availability(
+    coin: str,
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
+):
+    """
+    Every exchange currently quoting this coin, what it is priced
+    against, and how fresh that price is - split into Indian and global.
+
+    This is what tells a reader "you can buy this on these three Indian
+    exchanges", and it is read from what we actually collected, not from
+    a list somebody typed in.
+    """
+    require_key(x_api_key)
+    now = datetime.now(timezone.utc)
+
+    def build():
+        with engine.connect() as conn:
+            slug, symbol = resolve_coin(conn, coin)
+            rows = conn.execute(text("""
+                SELECT e.slug, e.name, e.country, p.symbol, p.symbol_std,
+                       p.price, p.volume_24h, p.collected_at
+                FROM prices_latest p
+                JOIN exchanges e ON e.id = p.exchange_id
+                WHERE e.is_active = TRUE AND p.symbol_std LIKE :pair
+                ORDER BY p.volume_24h DESC NULLS LAST
+            """), {"pair": f"{symbol}-%"}).mappings().all()
+
+        listings, india, globals_ = [], set(), set()
+        for r in rows:
+            age = age_in_seconds(r["collected_at"], now)
+            quote = (r["symbol_std"] or "").split("-")[-1]
+            entry = {
+                "exchange": r["slug"], "name": r["name"],
+                "region": "india" if r["country"] == "IN" else "global",
+                "pair": r["symbol_std"], "exchange_symbol": r["symbol"],
+                "quote": quote, "price": float(r["price"]),
+                "volume_24h": num(r["volume_24h"]),
+                "age_seconds": age,
+                "is_stale": age is not None and age > STALE_AFTER_SECONDS,
+            }
+            listings.append(entry)
+            if not entry["is_stale"]:
+                (india if entry["region"] == "india" else globals_).add(r["slug"])
+
+        return {
+            "symbol": symbol,
+            "coin_id": slug,
+            "indian_exchanges": sorted(india),
+            "global_exchanges": sorted(globals_),
+            "listed_on": len(india) + len(globals_),
+            "buyable_with_inr": bool(india),
+            "listings": listings,
+        }
+
+    return cached(f"avail:{coin.lower()}", build)
