@@ -32,7 +32,7 @@ from serve.quality_score import score_exchange
 from storage.fx import load_rate
 from serve.pages import landing_html, docs_html
 from serve.cache import cached
-from shared.calc import trade_cost
+from shared.calc import trade_cost, is_leveraged_token, USEFUL_QUOTES
 from ingest.quality import price_flags, aggregate, group_key
 
 TAGS = [
@@ -1207,6 +1207,11 @@ def search(
     exact symbol match always wins. Coins we price but have no page for
     are included after those, so a search never comes back empty just
     because we lack a description.
+
+    Leveraged tokens (DOGE3L, BTCUP and the like) are never returned.
+    They are derivatives that decay in value, they sit right next to the
+    real coin in an exchange's list, and handing one to somebody
+    searching for Dogecoin would be doing them harm.
     """
     require_key(x_api_key)
     term = q.strip()
@@ -1237,7 +1242,7 @@ def search(
                 "rank": r["rank"], "logo_url": logo_url(r["symbol"]),
                 "usd_price": num(r["usd_price"]), "market_cap": num(r["market_cap"]),
                 "has_page": True,
-            } for r in rows]
+            } for r in rows if not is_leveraged_token(r["symbol"])]
 
             # Room left over? Fill it with coins we price but cannot
             # describe, rather than returning a short list.
@@ -1255,7 +1260,7 @@ def search(
                     "symbol": r["base"], "coin_id": None, "name": None, "rank": None,
                     "logo_url": logo_url(r["base"]), "usd_price": num(r["price"]),
                     "market_cap": None, "has_page": False,
-                } for r in extra]
+                } for r in extra if not is_leveraged_token(r["base"])]
         return {"query": term, "count": len(found), "results": found}
 
     return cached(f"search:{term.lower()}:{limit}", build)
@@ -1266,6 +1271,8 @@ def search(
 @app.get("/v1/availability/{coin}", tags=["Exchanges"])
 def availability(
     coin: str,
+    all_pairs: bool = Query(False, alias="all",
+                            description="Include every quote currency, not just the useful ones"),
     x_api_key: Optional[str] = Header(None, include_in_schema=False),
 ):
     """
@@ -1275,6 +1282,11 @@ def availability(
     This is what tells a reader "you can buy this on these three Indian
     exchanges", and it is read from what we actually collected, not from
     a list somebody typed in.
+
+    By default only rupee and dollar pairs are shown. Lira, real and yen
+    pairs mean nothing to an Indian reader, and dead stablecoin pairs
+    like BUSD and TUSD carry prices that drifted thousands of dollars
+    from the market long ago. Pass `all=true` to see everything.
     """
     require_key(x_api_key)
     now = datetime.now(timezone.utc)
@@ -1295,6 +1307,8 @@ def availability(
         for r in rows:
             age = age_in_seconds(r["collected_at"], now)
             quote = (r["symbol_std"] or "").split("-")[-1]
+            if not all_pairs and quote not in USEFUL_QUOTES:
+                continue
             entry = {
                 "exchange": r["slug"], "name": r["name"],
                 "region": "india" if r["country"] == "IN" else "global",
@@ -1314,8 +1328,9 @@ def availability(
             "indian_exchanges": sorted(india),
             "global_exchanges": sorted(globals_),
             "listed_on": len(india) + len(globals_),
+            "showing": "all pairs" if all_pairs else "INR and dollar pairs only",
             "buyable_with_inr": bool(india),
             "listings": listings,
         }
 
-    return cached(f"avail:{coin.lower()}", build)
+    return cached(f"avail:{coin.lower()}:{all_pairs}", build)
