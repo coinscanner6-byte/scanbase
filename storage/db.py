@@ -198,3 +198,15 @@ def load_listed_symbols():
         return set(conn.execute(text(
             "SELECT DISTINCT UPPER(symbol) FROM coins WHERE is_active = TRUE"
         )).scalars().all())
+
+
+def load_supplies():
+    """{SYMBOL: circulating supply} for listed coins - used for market cap."""
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT UPPER(symbol), MAX(circulating_supply)
+            FROM coins
+            WHERE is_active = TRUE AND circulating_supply > 0
+            GROUP BY UPPER(symbol)
+        """)).fetchall()
+    return {r[0]: float(r[1]) for r in rows}
