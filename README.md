@@ -60,6 +60,8 @@ Interactive docs: `https://scanbase-api.up.railway.app/docs`
 | `GET /v1/prices/{coin}` | Yes | Official USD + INR price, and both India premiums, for one coin |
 | `GET /v1/global?currency=usd\|inr` | Yes | Market totals: combined market cap, volume, BTC and ETH share |
 | `GET /v1/cost/{coin}?amount_inr=&side=buy\|sell` | Yes | **True cost**: every Indian exchange ranked by what a trade really costs |
+| `GET /v1/search?q=&limit=` | Yes | Find a coin by symbol, name or slug |
+| `GET /v1/availability/{coin}` | Yes | Which exchanges quote this coin, and whether it can be bought with rupees |
 | `GET /v1/candles/{coin}?currency=&interval=1h\|1d&days=` | Yes | Candles of the official price (listed coins) |
 | `GET /v1/exchanges/{slug}` | Yes | One exchange: quality rating and daily stats |
 | `GET /v1/exchanges` | Yes | Exchanges we collect from, with quality rating |
@@ -292,3 +294,17 @@ so any row left hours behind is one the exchange has stopped returning.
 Those rows are deleted as part of the same save. `VANISHED_PAIR_HOURS`
 (6 by default) is the grace period, long enough that a few failed
 rounds cannot wipe good pairs.
+
+## Caching
+
+`/v1/prices` and `/v1/global` hold their answers for 30 seconds in the
+API process. Prices only refresh every few minutes, so nothing is made
+staler than it already was, and repeated identical requests stop
+reaching the database.
+
+Only the query is cached, never the age of a price: how old a price is
+gets worked out against the real clock on every request, so a cached
+answer can never claim to be fresher than it is.
+
+No Redis and no extra service. The cache lives in memory, empties on
+restart, and is a shock absorber rather than storage.
