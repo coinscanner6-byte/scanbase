@@ -10,8 +10,11 @@ Method (the same idea the big aggregators publish):
      previous official price.
   4. Volume-weighted average of what is left.
 
+USDT is not exactly one dollar, so USDT prices are converted using the
+real USDT value worked out from USDC-USDT pairs (see usd_per_usdt).
+
 Two separate official prices:
-  USD - from GLOBAL exchanges' USDT/USDC pairs
+  USD - from GLOBAL exchanges' USDT/USDC pairs, in true dollars
   INR - from INDIAN exchanges' INR pairs
 Indian exchanges never move the USD price (their prices carry the
 India premium).
@@ -21,7 +24,8 @@ Pure functions - no internet, no database.
 
 from statistics import median
 
-from shared.config import WIDE_SPREAD_PCT, THIN_VOLUME_USD, OUTLIER_Z, OUTLIER_MIN_PCT
+from shared.config import (WIDE_SPREAD_PCT, THIN_VOLUME_USD, OUTLIER_Z,
+                           OUTLIER_MIN_PCT, USE_STABLECOIN_PEG, PEG_MIN, PEG_MAX)
 
 USD_QUOTES = ("USDT", "USDC")
 JUMP_LIMIT = 0.5          # 50% away from the previous official price
@@ -135,6 +139,41 @@ def aggregate(points, previous=None):
     }
 
 
+def usd_per_usdt(round_rows, countries):
+    """
+    What one USDT is really worth in dollars.
+
+    USDT is usually a little under a dollar, so calling it exactly $1
+    makes every price slightly wrong. USDC holds the dollar much more
+    closely, so we treat USDC as the dollar and read the USDC-USDT
+    pairs: if 1 USDC buys 1.0004 USDT, then 1 USDT is 0.9996 dollars.
+
+    Returns (value, exchanges used). Falls back to 1.0 with no
+    exchanges when the pair is missing or the answer looks wrong.
+    """
+    if not USE_STABLECOIN_PEG:
+        return 1.0, []
+    points = [
+        {"exchange": ex, "price": r["price"], "volume": r.get("volume_24h"), "flags": []}
+        for ex, rows in round_rows.items() if countries.get(ex) != "IN"
+        for r in rows if r.get("symbol_std") == "USDC-USDT" and r.get("price")
+    ]
+    result = aggregate(points)
+    if not result or not result["price"] > 0:
+        return 1.0, []
+    value = 1.0 / result["price"]
+    if not PEG_MIN <= value <= PEG_MAX:
+        return 1.0, []
+    return value, result["kept"]
+
+
+def to_usd(quote, peg):
+    """Dollars per one unit of the quote currency (USD groups only)."""
+    if quote == "USDT":
+        return peg
+    return 1.0          # USDC and USD are the dollar anchor
+
+
 def group_key(row, country):
     """Which official price a row feeds: (base, 'USD'|'INR') or None."""
     base, quote = split_pair(row.get("symbol_std"))
@@ -169,6 +208,10 @@ def build_indexes(round_rows, countries, previous=None):
     fx = aggregate(fx_points, previous.get(("USDT", "INR")))
     usdt_inr = fx["price"] if fx else None
 
+    # What a USDT is really worth in dollars, so USD prices are true
+    # dollars rather than "USDT pretending to be a dollar".
+    peg, peg_sources = usd_per_usdt(round_rows, countries)
+
     groups, stats, row_flags = {}, {}, {}
     for ex, rows in round_rows.items():
         country = countries.get(ex, "GLOBAL")
@@ -182,8 +225,10 @@ def build_indexes(round_rows, countries, previous=None):
             s["midpoint"] += "estimated_price" in flags
             key = group_key(r, country)
             if key:
+                _, quote = split_pair(r.get("symbol_std"))
+                rate = to_usd(quote, peg) if key[1] == "USD" else 1.0
                 groups.setdefault(key, []).append({
-                    "exchange": ex, "price": r["price"],
+                    "exchange": ex, "price": r["price"] * rate,
                     "volume": r.get("volume_24h"), "flags": flags,
                 })
 
@@ -206,6 +251,17 @@ def build_indexes(round_rows, countries, previous=None):
             for p in best.values():
                 stats[p["exchange"]]["devs"].append(
                     abs(p["price"] - result["price"]) / result["price"] * 100)
+
+    # USDT has no USDT pair of its own, so its dollar price is the peg.
+    if peg_sources:
+        indexes[("USDT", "USD")] = {
+            "price": peg,
+            "kept": peg_sources,
+            "excluded": {},
+            "confidence": "high" if len(peg_sources) >= 3 else
+                          "medium" if len(peg_sources) == 2 else "low",
+            "volume_quote": None,
+        }
 
     for s in stats.values():
         devs = s.pop("devs")

@@ -31,6 +31,8 @@ def main():
     if collected and not wanted:
         from ingest.worker import update_official_prices
         update_official_prices(collected, results, {}, print)
+        from storage.fx import refresh_usd_inr
+        refresh_usd_inr()
     failed = [s for s, r in results.items() if r != "ok"]
     print(f"\nDone. {len(results) - len(failed)} ok, {len(failed)} failed.")
 

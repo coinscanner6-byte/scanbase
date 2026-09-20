@@ -52,9 +52,13 @@ Interactive docs: `https://scanbase-api.up.railway.app/docs`
 
 | Endpoint | Key? | What it returns |
 |---|---|---|
+| `GET /` | No | Front page: what the API does, with a live Bitcoin board |
+| `GET /docs` | No | Interactive reference - authorize once, then run any request |
+| `GET /v1/demo/snapshot` | No | The handful of numbers the front page shows |
 | `GET /v1/health` | No | API and database are up |
-| `GET /v1/prices?currency=usd\|inr&symbols=&listed_only=` | Yes | **Official Scanbase prices** (paged) |
-| `GET /v1/prices/{coin}` | Yes | Official USD + INR price and India premium for one coin |
+| `GET /v1/prices?currency=usd\|inr&symbols=&listed_only=&sort=&order=` | Yes | **Official prices, market cap and 1h/24h/7d change** (paged, sortable) |
+| `GET /v1/prices/{coin}` | Yes | Official USD + INR price, and both India premiums, for one coin |
+| `GET /v1/global?currency=usd\|inr` | Yes | Market totals: combined market cap, volume, BTC and ETH share |
 | `GET /v1/candles/{coin}?currency=&interval=1h\|1d&days=` | Yes | Candles of the official price (listed coins) |
 | `GET /v1/exchanges/{slug}` | Yes | One exchange: quality rating and daily stats |
 | `GET /v1/exchanges` | Yes | Exchanges we collect from, with quality rating |
@@ -186,3 +190,55 @@ Shown after 30+ rounds.
 
 An exchange returning zero valid prices is recorded as a failure. One
 returning less than half its usual pairs gets a warning in `/v1/status`.
+
+## True dollar prices
+
+A USDT is not exactly a dollar. It usually trades a little under, so
+treating it as $1 makes every price slightly too high.
+
+Each round we read the USDC-USDT pairs on the global exchanges and work
+out what a USDT is really worth (USDC is the steadier of the two, so it
+is our dollar). Every USDT price is then converted at that rate, and
+USDT itself gets a dollar price of its own. A safety range of 0.9 to
+1.1 catches bad data; outside it we fall back to exactly $1.
+
+The difference is small, roughly 0.04%, and it is the difference
+between matching the big aggregators and being quietly off.
+
+## Market cap and ranking
+
+Market cap is the official price times the circulating supply held in
+the `coins` table. Coins with no supply figure return an empty market
+cap rather than a guessed one, and `market_cap_rank` is worked out live
+from the current numbers instead of an inherited ranking.
+
+`/v1/prices` sorts by `market_cap`, `volume`, `price`, `change_1h`,
+`change_24h`, `change_7d` or `rank`, ascending or descending. Biggest
+first is the default.
+
+## Price changes
+
+`change_1h_pct`, `change_24h_pct` and `change_7d_pct` compare the price
+now with the official-price candle from that long ago. If the candle at
+that exact hour is missing (the worker was down), the nearest earlier
+candle within 3 hours is used.
+
+Changes exist only for coins with candles, which means listed coins,
+and only for windows we actually have. A brand new install shows an
+empty 7d change for a week. That is deliberate: an empty number is
+honest, a made-up one is not.
+
+## The two India premiums
+
+`/v1/prices/{coin}` answers two different questions, because they have
+very different answers:
+
+| Field | Question | Typical |
+|---|---|---|
+| `india_premium_pct` | Are Indian exchanges dearer than global ones, for someone already holding USDT? | near zero |
+| `india_premium_vs_bank_pct` | Is an Indian paying more than the plain dollar value of the coin at the bank rate? | a few percent |
+
+The second one is the money question. Almost all of it sits in the
+rupee-to-USDT step, not in the exchange's coin price. The bank rate
+comes from a free currency service, refreshed every few hours, and is
+never mixed into any crypto price.

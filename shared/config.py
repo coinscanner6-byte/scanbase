@@ -86,3 +86,23 @@ BREAKAGE_DROP = float(os.getenv("BREAKAGE_DROP", "0.5"))
 
 # Official-price candles are kept hourly for this many days, then daily.
 CANDLE_HOURLY_KEEP_DAYS = _int("CANDLE_HOURLY_KEEP_DAYS", 90)
+
+# ---------- market data (Batch 2) ----------
+
+# USDT is not exactly one dollar. We work out its real value from
+# USDC-USDT pairs and price everything in true dollars. Set to 0 to
+# go back to treating USDT as exactly $1.
+USE_STABLECOIN_PEG = os.getenv("USE_STABLECOIN_PEG", "1") not in ("0", "false", "False")
+
+# A safety belt: if the worked-out USDT value falls outside this range,
+# something is wrong with the data, so we use 1.0 instead.
+PEG_MIN = float(os.getenv("PEG_MIN", "0.9"))
+PEG_MAX = float(os.getenv("PEG_MAX", "1.1"))
+
+# Ordinary bank USD-INR rate, refreshed this often (hours).
+FIAT_REFRESH_HOURS = _int("FIAT_REFRESH_HOURS", 6)
+FIAT_RATE_URL = os.getenv("FIAT_RATE_URL", "https://api.exchangerate-api.com/v4/latest/USD")
+
+# If a candle is missing at the exact hour we want to compare against,
+# look back at most this many hours for the nearest one.
+CHANGE_LOOKBACK_HOURS = _int("CHANGE_LOOKBACK_HOURS", 3)

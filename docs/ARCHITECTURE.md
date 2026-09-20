@@ -58,6 +58,10 @@ flowchart LR
 | Candles only for listed coins | Keeps writes and storage small |
 | Exchange rating from our own stats | Independent of what exchanges claim about themselves |
 | Stored both exchange time and our time | Shows delays at the source |
+| USDT priced from USDC-USDT rather than assumed to be $1 | Matches the big aggregators to the fourth decimal |
+| Market cap empty when supply is unknown | A guessed market cap is worse than none |
+| Changes computed from our own candles | No second data source to pay for or trust |
+| Bank FX rate kept apart from all crypto rates | The gap between them is the product |
 | API keys stored only as SHA-256 hashes | A database leak exposes no usable keys |
 | Rate limit counted per key per hour in one DB trip | Accurate under parallel requests, table stays small |
 | Migrations numbered and re-runnable | Same command safely updates any database |

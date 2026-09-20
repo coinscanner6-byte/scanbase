@@ -17,10 +17,10 @@ from typing import Optional
 from statistics import median
 
 from fastapi import FastAPI, HTTPException, Header, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse
 from sqlalchemy import text
 
-from shared.config import STALE_AFTER_SECONDS, HOURLY_KEEP_DAYS
+from shared.config import STALE_AFTER_SECONDS, HOURLY_KEEP_DAYS, PUBLIC_BASE_URL
 from storage.db import engine
 from ingest.symbols import standardise
 from serve.auth import check_key
@@ -28,16 +28,63 @@ from serve.logos import logo_url, placeholder_svg
 from serve.coin_format import public_description, clean_links
 from serve.markets import compute_premium, premium_table, rank_best
 from serve.quality_score import score_exchange
+from storage.fx import load_rate
+from serve.pages import landing_html, docs_html
 from ingest.quality import price_flags, aggregate, group_key
+
+TAGS = [
+    {"name": "Prices", "description": "Official prices, market cap, change and candles."},
+    {"name": "India", "description": "What a coin really costs an Indian buyer."},
+    {"name": "Exchanges", "description": "Who we read, how well they behave, and their raw prices."},
+    {"name": "Coins", "description": "Names, details and logos."},
+    {"name": "Service", "description": "Health and demo data."},
+]
 
 app = FastAPI(
     title="CoinScanner API",
     description=(
-        "Live crypto prices collected from multiple exchanges, in one "
-        "standard format. Send your key in the `X-API-Key` header."
+        "Live crypto prices from ten exchanges, turned into one official price "
+        "per coin in dollars and in rupees.\n\n"
+        "Press **Authorize**, paste your key, then run any request below against "
+        "live data. Every price carries its age, so old data can never look live."
     ),
-    version="0.8.0",
+    version="0.9.0",
+    openapi_tags=TAGS,
+    docs_url=None,          # replaced by our own page, see /docs below
+    redoc_url=None,
 )
+
+
+def _openapi():
+    """Add the API-key box to the docs page without touching every endpoint."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    from fastapi.openapi.utils import get_openapi
+    schema = get_openapi(title=app.title, version=app.version,
+                         description=app.description, tags=TAGS, routes=app.routes)
+    schema["components"]["securitySchemes"] = {
+        "ApiKeyHeader": {"type": "apiKey", "in": "header", "name": "X-API-Key"}
+    }
+    for path, methods in schema["paths"].items():
+        if path.startswith("/v1/health") or path.startswith("/v1/demo") or path == "/":
+            continue
+        for operation in methods.values():
+            operation["security"] = [{"ApiKeyHeader": []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _openapi
+
+
+@app.get("/", include_in_schema=False)
+def front_page():
+    return HTMLResponse(landing_html(PUBLIC_BASE_URL))
+
+
+@app.get("/docs", include_in_schema=False)
+def interactive_docs():
+    return HTMLResponse(docs_html(app.openapi_url))
 
 
 # ---------- helpers ----------
@@ -68,7 +115,7 @@ def age_in_seconds(moment, now):
 
 # ---------- endpoints ----------
 
-@app.get("/v1/health")
+@app.get("/v1/health", tags=["Service"])
 def health():
     """
     Open, no key needed - Railway and monitoring tools use it.
@@ -105,7 +152,7 @@ def quality_by_exchange(conn):
     return out
 
 
-@app.get("/v1/exchanges")
+@app.get("/v1/exchanges", tags=["Exchanges"])
 def list_exchanges(x_api_key: Optional[str] = Header(None)):
     """
     Every exchange we collect from, with our quality rating (last 7 days).
@@ -121,7 +168,7 @@ def list_exchanges(x_api_key: Optional[str] = Header(None)):
              "quality": quality.get(r[0])} for r in rows]
 
 
-@app.get("/v1/status")
+@app.get("/v1/status", tags=["Exchanges"])
 def exchange_status(x_api_key: Optional[str] = Header(None)):
     """
     Is each exchange working right now? Shows the last good round,
@@ -174,10 +221,18 @@ def usdt_inr_rate(conn):
     return float(r) if r else None
 
 
+def pct(value):
+    return round(float(value), 4) if value is not None else None
+
+
 def index_row_to_dict(r, now):
     age = age_in_seconds(r["updated_at"], now)
     return {
         "price": float(r["price"]),
+        "market_cap": num(r.get("market_cap")),
+        "change_1h_pct": pct(r.get("change_1h")),
+        "change_24h_pct": pct(r.get("change_24h")),
+        "change_7d_pct": pct(r.get("change_7d")),
         "currency": r["currency"],
         "confidence": r["confidence"],
         "sources": r["sources"],
@@ -190,7 +245,7 @@ def index_row_to_dict(r, now):
     }
 
 
-@app.get("/v1/ticker/{symbol}")
+@app.get("/v1/ticker/{symbol}", tags=["Exchanges"])
 def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None)):
     """
     Current price of one pair on every exchange that has it, with
@@ -268,7 +323,7 @@ def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None)):
     }
 
 
-@app.get("/v1/markets")
+@app.get("/v1/markets", tags=["Exchanges"])
 def list_markets(
     exchange: Optional[str] = None,
     limit: int = Query(1000, ge=1, le=5000),
@@ -301,7 +356,7 @@ def list_markets(
     }
 
 
-@app.get("/v1/history/{symbol}")
+@app.get("/v1/history/{symbol}", tags=["Exchanges"])
 def get_history(
     symbol: str,
     interval: str = Query("hour", pattern="^(hour|day)$",
@@ -410,7 +465,7 @@ def day(value):
     return value.isoformat() if value else None
 
 
-@app.get("/v1/coins")
+@app.get("/v1/coins", tags=["Coins"])
 def list_coins(
     search: Optional[str] = Query(None, description="Match name, symbol or slug"),
     limit: int = Query(100, ge=1, le=1000),
@@ -447,7 +502,7 @@ def list_coins(
     }
 
 
-@app.get("/v1/coins/{coin}")
+@app.get("/v1/coins/{coin}", tags=["Coins"])
 def get_coin(coin: str, x_api_key: Optional[str] = Header(None)):
     """
     Full info for one coin, plus its live USDT price.
@@ -515,7 +570,7 @@ def get_coin(coin: str, x_api_key: Optional[str] = Header(None)):
     }
 
 
-@app.get("/v1/logos/{symbol}")
+@app.get("/v1/logos/{symbol}", tags=["Coins"])
 def get_logo(symbol: str):
     """
     A coin's logo image. Open - no key - so it works directly in
@@ -566,7 +621,7 @@ def fresh_rows(conn, where="", params=None):
     ]
 
 
-@app.get("/v1/premium")
+@app.get("/v1/premium", tags=["India"])
 def list_premium(
     min_india: int = Query(1, ge=1, le=10, description="Minimum Indian exchanges with the coin"),
     min_global: int = Query(1, ge=1, le=10, description="Minimum global exchanges with the coin"),
@@ -589,7 +644,7 @@ def list_premium(
     return {"usdt_inr": usdt_inr, "count": len(table), "coins": table}
 
 
-@app.get("/v1/premium/{base}")
+@app.get("/v1/premium/{base}", tags=["India"])
 def get_premium(base: str, x_api_key: Optional[str] = Header(None)):
     """India premium for one coin, e.g. BTC."""
     require_key(x_api_key)
@@ -607,7 +662,7 @@ def get_premium(base: str, x_api_key: Optional[str] = Header(None)):
     return result
 
 
-@app.get("/v1/best/{symbol}")
+@app.get("/v1/best/{symbol}", tags=["India"])
 def best_price(
     symbol: str,
     country: Optional[str] = Query(None, description="IN = Indian exchanges only, GLOBAL = global only"),
@@ -651,23 +706,47 @@ def resolve_coin(conn, coin):
     return None, c.upper()
 
 
-@app.get("/v1/prices")
+SORTS = {
+    "market_cap": "i.market_cap",
+    "volume": "i.volume_quote",
+    "price": "i.price",
+    "change_1h": "i.change_1h",
+    "change_24h": "i.change_24h",
+    "change_7d": "i.change_7d",
+    "rank": "c.rank",
+}
+
+
+@app.get("/v1/prices", tags=["Prices"])
 def list_prices(
     currency: str = Query("usd", description="usd or inr"),
     symbols: Optional[str] = Query(None, description="Comma-separated, e.g. BTC,ETH"),
     listed_only: bool = Query(True, description="Only coins with a coin page"),
+    sort: str = Query("market_cap", description="market_cap, volume, price, change_1h, change_24h, change_7d, rank"),
+    order: str = Query("desc", description="desc or asc"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     x_api_key: Optional[str] = Header(None),
 ):
     """
-    Official Scanbase prices. USD comes from global exchanges only,
-    INR from Indian exchanges only. Best-ranked coins first.
+    Official Scanbase prices: price, market cap, and 1h/24h/7d change.
+    USD comes from global exchanges only, INR from Indian exchanges only.
+    Biggest coins first unless you sort differently.
     """
     require_key(x_api_key)
     cur = currency.strip().upper()
     if cur not in ("USD", "INR"):
         raise HTTPException(status_code=400, detail="currency must be usd or inr")
+    sort_key = sort.strip().lower()
+    if sort_key not in SORTS:
+        raise HTTPException(status_code=400,
+                            detail=f"sort must be one of: {', '.join(SORTS)}")
+    if order.strip().lower() not in ("asc", "desc"):
+        raise HTTPException(status_code=400, detail="order must be desc or asc")
+    direction = order.strip().upper()
+    # "rank" counts upwards (1 is best), so asc/desc read the natural way.
+    order_sql = (f"{SORTS[sort_key]} {direction} NULLS LAST, "
+                 "i.market_cap DESC NULLS LAST, i.volume_quote DESC NULLS LAST, i.base")
 
     where = ["i.currency = :cur"]
     params = {"cur": cur, "limit": limit, "offset": offset}
@@ -691,8 +770,13 @@ def list_prices(
     with engine.connect() as conn:
         total = conn.execute(text(f"SELECT count(*) {base_sql}"), params).scalar()
         rows = conn.execute(text(f"""
-            SELECT i.*, c.slug, c.name, c.rank {base_sql}
-            ORDER BY c.rank NULLS LAST, i.volume_quote DESC NULLS LAST, i.base
+            SELECT i.*, c.slug, c.name, c.rank,
+                   CASE WHEN i.market_cap IS NOT NULL THEN (
+                       SELECT count(*) + 1 FROM index_latest x
+                       WHERE x.currency = i.currency AND x.market_cap > i.market_cap
+                   ) END AS market_cap_rank
+            {base_sql}
+            ORDER BY {order_sql}
             LIMIT :limit OFFSET :offset
         """), params).mappings().all()
 
@@ -702,15 +786,18 @@ def list_prices(
         "total": total,
         "limit": limit,
         "offset": offset,
+        "sort": sort_key,
+        "order": order.strip().lower(),
         "prices": [
-            {"symbol": r["base"], "coin_id": r["slug"], "name": r["name"], "rank": r["rank"],
+            {"symbol": r["base"], "coin_id": r["slug"], "name": r["name"],
+             "rank": r["rank"], "market_cap_rank": r["market_cap_rank"],
              "logo_url": logo_url(r["base"]), **index_row_to_dict(r, now)}
             for r in rows
         ],
     }
 
 
-@app.get("/v1/prices/{coin}")
+@app.get("/v1/prices/{coin}", tags=["Prices"])
 def get_price(coin: str, x_api_key: Optional[str] = Header(None)):
     """
     Official USD and INR price for one coin (slug like "bitcoin" or
@@ -723,6 +810,7 @@ def get_price(coin: str, x_api_key: Optional[str] = Header(None)):
             "SELECT * FROM index_latest WHERE base = :b"
         ), {"b": symbol}).mappings().all()
         usdt_inr = usdt_inr_rate(conn)
+        usd_inr_bank, bank_at = load_rate(conn)
 
     if not rows:
         raise HTTPException(status_code=404, detail=f"No official price for '{coin}'")
@@ -730,9 +818,18 @@ def get_price(coin: str, x_api_key: Optional[str] = Header(None)):
     now = datetime.now(timezone.utc)
     by_cur = {r["currency"]: index_row_to_dict(r, now) for r in rows}
     usd, inr = by_cur.get("USD"), by_cur.get("INR")
+    # Two different questions, two different numbers.
+    # 1. Are Indian exchanges dearer than global ones, once you are
+    #    already holding USDT? Usually almost nothing.
+    # 2. Is an Indian paying more than the plain dollar value of the
+    #    coin at the bank rate? Usually a few percent, and that is the
+    #    number that costs a buyer real money.
     premium = None
     if usd and inr and usdt_inr:
         premium = round((inr["price"] / (usd["price"] * usdt_inr) - 1) * 100, 3)
+    bank_premium = None
+    if usd and inr and usd_inr_bank:
+        bank_premium = round((inr["price"] / (usd["price"] * usd_inr_bank) - 1) * 100, 3)
 
     return {
         "symbol": symbol,
@@ -741,11 +838,14 @@ def get_price(coin: str, x_api_key: Optional[str] = Header(None)):
         "usd": usd,
         "inr": inr,
         "usdt_inr": usdt_inr,
+        "usd_inr_bank": usd_inr_bank,
+        "usd_inr_bank_updated_at": bank_at.isoformat() if bank_at else None,
         "india_premium_pct": premium,
+        "india_premium_vs_bank_pct": bank_premium,
     }
 
 
-@app.get("/v1/candles/{coin}")
+@app.get("/v1/candles/{coin}", tags=["Prices"])
 def get_candles(
     coin: str,
     currency: str = Query("usd", description="usd or inr"),
@@ -814,7 +914,7 @@ def get_candles(
     }
 
 
-@app.get("/v1/exchanges/{slug}")
+@app.get("/v1/exchanges/{slug}", tags=["Exchanges"])
 def exchange_detail(slug: str, x_api_key: Optional[str] = Header(None)):
     """One exchange: rating, daily stats for the last 7 days, and current status."""
     require_key(x_api_key)
@@ -854,3 +954,117 @@ def exchange_detail(slug: str, x_api_key: Optional[str] = Header(None)):
             for d in days
         ],
     }
+
+
+
+# ---------- the whole market in one answer ----------
+
+@app.get("/v1/global", tags=["Prices"])
+def global_stats(
+    currency: str = Query("usd", description="usd or inr"),
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    Market totals: combined market cap, trading volume across the
+    exchanges we collect from, and Bitcoin's share.
+
+    Market cap counts only coins whose circulating supply we hold, so
+    it is the total of what we can actually measure rather than an
+    estimate of the whole market.
+    """
+    require_key(x_api_key)
+    cur = currency.strip().upper()
+    if cur not in ("USD", "INR"):
+        raise HTTPException(status_code=400, detail="currency must be usd or inr")
+
+    with engine.connect() as conn:
+        totals = conn.execute(text("""
+            SELECT count(*),
+                   count(*) FILTER (WHERE market_cap IS NOT NULL),
+                   SUM(market_cap), SUM(volume_quote), MAX(updated_at)
+            FROM index_latest WHERE currency = :cur
+        """), {"cur": cur}).first()
+        btc = conn.execute(text(
+            "SELECT market_cap FROM index_latest WHERE base = 'BTC' AND currency = :cur"
+        ), {"cur": cur}).scalar()
+        eth = conn.execute(text(
+            "SELECT market_cap FROM index_latest WHERE base = 'ETH' AND currency = :cur"
+        ), {"cur": cur}).scalar()
+        exchanges = conn.execute(text(
+            "SELECT count(*) FROM exchanges WHERE is_active = TRUE"
+        )).scalar()
+        usdt_inr = usdt_inr_rate(conn)
+        usd_inr_bank, bank_at = load_rate(conn)
+
+    total_cap = float(totals[2]) if totals[2] else None
+    share = (lambda v: round(float(v) / total_cap * 100, 3)
+             if v and total_cap else None)
+
+    return {
+        "currency": cur,
+        "coins_priced": totals[0],
+        "coins_with_market_cap": totals[1],
+        "total_market_cap": total_cap,
+        "total_volume_24h": float(totals[3]) if totals[3] else None,
+        "btc_dominance_pct": share(btc),
+        "eth_dominance_pct": share(eth),
+        "exchanges_tracked": exchanges,
+        "usdt_inr": usdt_inr,
+        "usd_inr_bank": usd_inr_bank,
+        "usdt_premium_vs_bank_pct": (
+            round((usdt_inr / usd_inr_bank - 1) * 100, 3)
+            if usdt_inr and usd_inr_bank else None
+        ),
+        "updated_at": totals[4].isoformat() if totals[4] else None,
+        "bank_rate_updated_at": bank_at.isoformat() if bank_at else None,
+    }
+
+
+
+# ---------- front-page data ----------
+
+_snapshot = {"at": None, "data": None}
+
+
+@app.get("/v1/demo/snapshot", tags=["Service"])
+def demo_snapshot():
+    """
+    A handful of live numbers for the front page. No key needed, because
+    it is the same public market data anyone can see on the site.
+    Cached for 30 seconds so a busy page cannot hammer the database.
+    """
+    now = datetime.now(timezone.utc)
+    if _snapshot["at"] and (now - _snapshot["at"]).total_seconds() < 30:
+        return _snapshot["data"]
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT currency, price, sources, updated_at FROM index_latest WHERE base = 'BTC'"
+        )).fetchall()
+        coins = conn.execute(text(
+            "SELECT count(*) FROM index_latest WHERE currency = 'USD'"
+        )).scalar()
+        exchanges = conn.execute(text(
+            "SELECT count(*) FROM exchanges WHERE is_active = TRUE"
+        )).scalar()
+        usd_inr_bank, _ = load_rate(conn)
+
+    by_cur = {r[0]: r for r in rows}
+    usd = float(by_cur["USD"][1]) if "USD" in by_cur else None
+    inr = float(by_cur["INR"][1]) if "INR" in by_cur else None
+    fresh = by_cur.get("USD") or by_cur.get("INR")
+    data = {
+        "symbol": "BTC",
+        "usd": usd,
+        "inr": inr,
+        "sources": by_cur["USD"][2] if "USD" in by_cur else None,
+        "india_premium_vs_bank_pct": (
+            round((inr / (usd * usd_inr_bank) - 1) * 100, 3)
+            if usd and inr and usd_inr_bank else None
+        ),
+        "coins_priced": coins,
+        "exchanges": exchanges,
+        "age_seconds": age_in_seconds(fresh[3], now) if fresh else None,
+    }
+    _snapshot.update({"at": now, "data": data})
+    return data
