@@ -59,6 +59,7 @@ Interactive docs: `https://scanbase-api.up.railway.app/docs`
 | `GET /v1/prices?currency=usd\|inr&symbols=&listed_only=&sort=&order=` | Yes | **Official prices, market cap and 1h/24h/7d change** (paged, sortable) |
 | `GET /v1/prices/{coin}` | Yes | Official USD + INR price, and both India premiums, for one coin |
 | `GET /v1/global?currency=usd\|inr` | Yes | Market totals: combined market cap, volume, BTC and ETH share |
+| `GET /v1/cost/{coin}?amount_inr=&side=buy\|sell` | Yes | **True cost**: every Indian exchange ranked by what a trade really costs |
 | `GET /v1/candles/{coin}?currency=&interval=1h\|1d&days=` | Yes | Candles of the official price (listed coins) |
 | `GET /v1/exchanges/{slug}` | Yes | One exchange: quality rating and daily stats |
 | `GET /v1/exchanges` | Yes | Exchanges we collect from, with quality rating |
@@ -242,3 +243,36 @@ The second one is the money question. Almost all of it sits in the
 rupee-to-USDT step, not in the exchange's coin price. The bank rate
 comes from a free currency service, refreshed every few hours, and is
 never mixed into any crypto price.
+
+## What a trade really costs in India
+
+`/v1/cost/{coin}` answers the question the site exists for: if I spend
+a lakh on this coin today, what do I actually get, and where should I
+buy it?
+
+Three things sit between a buyer and the coin's plain dollar value:
+
+| | What it is | Roughly |
+|---|---|---|
+| Exchange price premium | The rupee price sitting above the bank-rate value, mostly the USDT gap | 3 to 4% |
+| Fee plus GST | The exchange's own cut, plus 18% GST on that cut | 0 to 0.55% |
+| TDS | 1% taken by law, on a sale only, never on a buy | 1% on sale |
+
+Exchanges are ranked cheapest first, and the ranking can surprise: an
+exchange quoting a higher price can still win because it charges no
+per-trade fee, while the cheapest quote can lose on a fat percentage.
+
+### Fees are hand-kept, and the API says so
+
+Aggregator sites disagree with each other about Indian exchange fees,
+so every rate in `exchange_fees` comes from the exchange's own page and
+carries that URL and the date it was read. Two rules follow:
+
+- an exchange with no verified fee is **listed but left out of the
+  ranking** - an admitted gap beats a guessed number
+- a fee older than 180 days is flagged `fee_may_be_out_of_date`
+
+Only the base retail tier is stored. Volume tiers change often and do
+not apply to ordinary buyers.
+
+To update a rate, edit the row and set `verified_on` to today.
