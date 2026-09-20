@@ -154,7 +154,7 @@ def quality_by_exchange(conn):
 
 
 @app.get("/v1/exchanges", tags=["Exchanges"])
-def list_exchanges(x_api_key: Optional[str] = Header(None)):
+def list_exchanges(x_api_key: Optional[str] = Header(None, include_in_schema=False)):
     """
     Every exchange we collect from, with our quality rating (last 7 days).
     quality is null until an exchange has enough data (30+ rounds).
@@ -170,7 +170,7 @@ def list_exchanges(x_api_key: Optional[str] = Header(None)):
 
 
 @app.get("/v1/status", tags=["Exchanges"])
-def exchange_status(x_api_key: Optional[str] = Header(None)):
+def exchange_status(x_api_key: Optional[str] = Header(None, include_in_schema=False)):
     """
     Is each exchange working right now? Shows the last good round,
     the last failure and its reason, and whether data is stale.
@@ -247,7 +247,7 @@ def index_row_to_dict(r, now):
 
 
 @app.get("/v1/ticker/{symbol}", tags=["Exchanges"])
-def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None)):
+def get_ticker(symbol: str, x_api_key: Optional[str] = Header(None, include_in_schema=False)):
     """
     Current price of one pair on every exchange that has it, with
     quality flags, plus the official Scanbase price where one applies.
@@ -329,7 +329,7 @@ def list_markets(
     exchange: Optional[str] = None,
     limit: int = Query(1000, ge=1, le=5000),
     offset: int = Query(0, ge=0),
-    x_api_key: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
 ):
     """Every pair currently tracked, optionally for one exchange. Paged."""
     require_key(x_api_key)
@@ -365,7 +365,7 @@ def get_history(
                                       "day = open/high/low/close per day (all history)"),
     days: int = Query(7, ge=1, le=3650, description="How far back to go"),
     exchange: Optional[str] = Query(None, description="One exchange only, e.g. binance"),
-    x_api_key: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
 ):
     """
     Past prices for one pair - what CoinScanner needs for charts.
@@ -471,7 +471,7 @@ def list_coins(
     search: Optional[str] = Query(None, description="Match name, symbol or slug"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    x_api_key: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
 ):
     """All coins, best-ranked first. Short info only - use /v1/coins/{coin} for details."""
     require_key(x_api_key)
@@ -504,7 +504,7 @@ def list_coins(
 
 
 @app.get("/v1/coins/{coin}", tags=["Coins"])
-def get_coin(coin: str, x_api_key: Optional[str] = Header(None)):
+def get_coin(coin: str, x_api_key: Optional[str] = Header(None, include_in_schema=False)):
     """
     Full info for one coin, plus its live USDT price.
     Accepts the slug ("dogecoin") or the symbol ("DOGE"). If several coins
@@ -627,7 +627,7 @@ def list_premium(
     min_india: int = Query(1, ge=1, le=10, description="Minimum Indian exchanges with the coin"),
     min_global: int = Query(1, ge=1, le=10, description="Minimum global exchanges with the coin"),
     sort: str = Query("premium", pattern="^(premium|base)$"),
-    x_api_key: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
 ):
     """
     India premium for every coin traded in INR: how much more (or less)
@@ -646,7 +646,7 @@ def list_premium(
 
 
 @app.get("/v1/premium/{base}", tags=["India"])
-def get_premium(base: str, x_api_key: Optional[str] = Header(None)):
+def get_premium(base: str, x_api_key: Optional[str] = Header(None, include_in_schema=False)):
     """India premium for one coin, e.g. BTC."""
     require_key(x_api_key)
     wanted = base.strip().upper()
@@ -667,7 +667,7 @@ def get_premium(base: str, x_api_key: Optional[str] = Header(None)):
 def best_price(
     symbol: str,
     country: Optional[str] = Query(None, description="IN = Indian exchanges only, GLOBAL = global only"),
-    x_api_key: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
 ):
     """
     Where to buy a pair cheapest and sell it highest right now.
@@ -727,7 +727,7 @@ def list_prices(
     order: str = Query("desc", description="desc or asc"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    x_api_key: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
 ):
     """
     Official Scanbase prices: price, market cap, and 1h/24h/7d change.
@@ -799,7 +799,7 @@ def list_prices(
 
 
 @app.get("/v1/prices/{coin}", tags=["Prices"])
-def get_price(coin: str, x_api_key: Optional[str] = Header(None)):
+def get_price(coin: str, x_api_key: Optional[str] = Header(None, include_in_schema=False)):
     """
     Official USD and INR price for one coin (slug like "bitcoin" or
     symbol like "BTC"), plus the India premium between them.
@@ -852,7 +852,7 @@ def get_candles(
     currency: str = Query("usd", description="usd or inr"),
     interval: str = Query("1h", description="1h (last 90 days) or 1d (all history)"),
     days: int = Query(7, ge=1, le=3650),
-    x_api_key: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
 ):
     """
     Open/high/low/close candles of the OFFICIAL price, for listed coins.
@@ -916,7 +916,7 @@ def get_candles(
 
 
 @app.get("/v1/exchanges/{slug}", tags=["Exchanges"])
-def exchange_detail(slug: str, x_api_key: Optional[str] = Header(None)):
+def exchange_detail(slug: str, x_api_key: Optional[str] = Header(None, include_in_schema=False)):
     """One exchange: rating, daily stats for the last 7 days, and current status."""
     require_key(x_api_key)
     with engine.connect() as conn:
@@ -963,7 +963,7 @@ def exchange_detail(slug: str, x_api_key: Optional[str] = Header(None)):
 @app.get("/v1/global", tags=["Prices"])
 def global_stats(
     currency: str = Query("usd", description="usd or inr"),
-    x_api_key: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
 ):
     """
     Market totals: combined market cap, trading volume across the
@@ -1079,7 +1079,7 @@ def true_cost(
     coin: str,
     amount_inr: float = Query(100000, gt=0, description="Rupees you plan to spend or sell"),
     side: str = Query("buy", description="buy or sell"),
-    x_api_key: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, include_in_schema=False),
 ):
     """
     The real cost of buying or selling a coin on each Indian exchange:
@@ -1087,9 +1087,10 @@ def true_cost(
     sale - measured against the coin's plain dollar value at the
     ordinary bank rate.
 
-    Exchanges are ranked cheapest first. Any exchange whose published
-    fee we have not verified is listed but left out of the ranking,
-    because a guessed fee is worse than an admitted gap.
+    Exchanges are ranked cheapest first. An exchange is listed but left
+    out of the ranking when its price has gone stale, or when we have
+    not verified its published fee - an admitted gap beats a guess, and
+    a dead price beats neither.
     """
     require_key(x_api_key)
     if side not in ("buy", "sell"):
@@ -1132,8 +1133,17 @@ def true_cost(
             "fee_verified_on": r["verified_on"].isoformat() if r["verified_on"] else None,
             "fee_note": r["notes"],
         }
+        # A pair an exchange has stopped quoting keeps its last price until
+        # cleanup removes it. Ranking that would send a buyer to a price
+        # that no longer exists, so anything stale is shown but not ranked.
+        if entry["age_seconds"] is not None and entry["age_seconds"] > STALE_AFTER_SECONDS:
+            entry.update({"fee_known": r["taker_pct"] is not None,
+                          "ranked": False, "not_ranked_because": "price is stale"})
+            unknown.append(entry)
+            continue
         if r["taker_pct"] is None and r["fee_model"] != "subscription":
-            entry["fee_known"] = False
+            entry.update({"fee_known": False, "ranked": False,
+                          "not_ranked_because": "we have not verified this exchange's fee"})
             unknown.append(entry)
             continue
         cost = trade_cost(side, amount_inr, float(r["price"]), fair_value, dict(r),
@@ -1141,7 +1151,8 @@ def true_cost(
         stale = (r["verified_on"] is None
                  or (now.date() - r["verified_on"]).days > FEE_STALE_DAYS)
         entry.update(cost or {})
-        entry.update({"fee_known": True, "fee_may_be_out_of_date": stale})
+        entry.update({"fee_known": True, "ranked": True,
+                      "fee_may_be_out_of_date": stale})
         priced.append(entry)
 
     # Cheapest first: least paid on a buy, most received on a sale.

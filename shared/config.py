@@ -117,3 +117,8 @@ GST_ON_FEE_PCT = float(os.getenv("GST_ON_FEE_PCT", "18.0"))
 # Past this many days, a stored exchange fee is called approximate
 # rather than presented as fact.
 FEE_STALE_DAYS = _int("FEE_STALE_DAYS", 180)
+
+# A pair missing from an exchange's response for longer than this is
+# treated as delisted and removed from the live table. Long enough that
+# a few failed rounds cannot wipe good pairs.
+VANISHED_PAIR_HOURS = _int("VANISHED_PAIR_HOURS", 6)

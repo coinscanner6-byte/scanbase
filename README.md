@@ -270,9 +270,25 @@ carries that URL and the date it was read. Two rules follow:
 
 - an exchange with no verified fee is **listed but left out of the
   ranking** - an admitted gap beats a guessed number
+- an exchange whose **price has gone stale** is also listed but not
+  ranked, with `not_ranked_because` saying why. Sending a buyer to a
+  price that no longer exists is worse than showing one fewer option
 - a fee older than 180 days is flagged `fee_may_be_out_of_date`
 
 Only the base retail tier is stored. Volume tiers change often and do
 not apply to ordinary buyers.
 
 To update a rate, edit the row and set `verified_on` to today.
+
+## Pairs that quietly disappear
+
+When an exchange stops quoting a pair, its last price used to sit in
+`prices_latest` for ever, looking exactly like a live one. Giottus
+dropped BTC-INR while its other pairs kept flowing, and the stale price
+went unnoticed for two days.
+
+Every pair still being quoted is stamped with the current round's time,
+so any row left hours behind is one the exchange has stopped returning.
+Those rows are deleted as part of the same save. `VANISHED_PAIR_HOURS`
+(6 by default) is the grace period, long enough that a few failed
+rounds cannot wipe good pairs.

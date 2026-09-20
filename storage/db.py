@@ -7,7 +7,9 @@ goes through here, so there's only one place to fix if it changes.
 from sqlalchemy import create_engine, text
 from psycopg2.extras import execute_values
 
-from shared.config import DATABASE_URL
+from datetime import timedelta
+
+from shared.config import DATABASE_URL, VANISHED_PAIR_HOURS
 
 if not DATABASE_URL:
     raise RuntimeError(
@@ -68,6 +70,11 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
         history_rows = prices
 
     hour_bucket = collected_at.replace(minute=0, second=0, microsecond=0)
+    # Every pair still being quoted gets this round's timestamp below, so
+    # anything left far behind is a pair the exchange has stopped
+    # returning. The grace period means one bad round cannot wipe good
+    # pairs - only a pair missing for hours is removed.
+    vanished_before = collected_at - timedelta(hours=VANISHED_PAIR_HOURS)
 
     latest_values = [
         (
@@ -113,6 +120,13 @@ def save_prices(exchange_id, prices, collected_at, history_rows=None):
                 """,
                 latest_values,
                 page_size=1000,
+            )
+            # Drop pairs this exchange has stopped quoting, in the same
+            # trip. Without this, a delisted pair's last price sits in
+            # the table for ever and looks exactly like a live one.
+            cur.execute(
+                "DELETE FROM prices_latest WHERE exchange_id = %s AND collected_at < %s",
+                (exchange_id, vanished_before),
             )
             if hourly_values:
                 execute_values(
