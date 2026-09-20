@@ -43,10 +43,9 @@ TAGS = [
 app = FastAPI(
     title="CoinScanner API",
     description=(
-        "Live crypto prices from ten exchanges, turned into one official price "
-        "per coin in dollars and in rupees.\n\n"
-        "Press **Authorize**, paste your key, then run any request below against "
-        "live data. Every price carries its age, so old data can never look live."
+        "Live crypto prices from ten exchanges, turned into one official price per "
+        "coin in dollars and in rupees. Every price carries its age, so old data "
+        "can never look live."
     ),
     version="0.9.0",
     openapi_tags=TAGS,
